@@ -80,6 +80,24 @@ export interface WitnessTracePoint {
   readonly input: InputFrame;
 }
 
+export interface ChallengeManeuver {
+  /** Longitudinal row centre relative to the first row in the challenge. */
+  readonly offsetM: number;
+  /** Lanes occupied by blockers when the challenge is locked. */
+  readonly blockedLaneMask: LaneMask;
+  /** Full rows demand a hop; dodge rows intersect the low landing beat. */
+  readonly action: 'jump' | 'dodge';
+  /** Certified lane for this beat (also the command target after the prior row). */
+  readonly targetLane: LaneIndex;
+}
+
+export interface ChallengeApproachRoute {
+  /** Existing ordinary encounter that must be cleared before the mixed chain. */
+  readonly encounterId: string;
+  /** The already-certified escape lane for that encounter. */
+  readonly targetLane: LaneIndex;
+}
+
 export interface ChallengeCertificate {
   readonly version: 1;
   readonly id: string;
@@ -91,9 +109,12 @@ export interface ChallengeCertificate {
   readonly dependencyHash: string;
   readonly targetLane: LaneIndex;
   readonly selectedVehicle: VehicleKind;
+  readonly approachRoutes: readonly ChallengeApproachRoute[];
+  readonly maneuverPlan: readonly ChallengeManeuver[];
   readonly blockerIds: readonly string[];
   readonly blockerTrajectories: readonly {
     id: string;
+    encounterId: string;
     lane: LaneIndex;
     startTick: number;
     startZM: number;

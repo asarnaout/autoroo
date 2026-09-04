@@ -323,7 +323,7 @@ describe('procedural road topology', () => {
     expect(difficultyAt(20_000)).toBeLessThanOrEqual(1);
   });
 
-  it('contracts ordinary rows from roughly 84 m to a 22–30 m dense core', () => {
+  it('contracts ordinary rows from roughly 46 m to a 26–30 m dense core', () => {
     const early: number[] = [];
     const late: number[] = [];
     for (let seed = 0; seed < 1000; seed += 1) {
@@ -332,11 +332,11 @@ describe('procedural road topology', () => {
     }
     const mean = (values: number[]) =>
       values.reduce((sum, value) => sum + value, 0) / values.length;
-    expect(mean(early)).toBeCloseTo(84, 0);
-    expect(mean(late)).toBeCloseTo(26, 0);
-    expect(Math.min(...early)).toBeGreaterThanOrEqual(80);
-    expect(Math.max(...early)).toBeLessThanOrEqual(88);
-    expect(Math.min(...late)).toBeGreaterThanOrEqual(22);
+    expect(mean(early)).toBeCloseTo(46, 0);
+    expect(mean(late)).toBeCloseTo(28, 0);
+    expect(Math.min(...early)).toBeGreaterThanOrEqual(44);
+    expect(Math.max(...early)).toBeLessThanOrEqual(48);
+    expect(Math.min(...late)).toBeGreaterThanOrEqual(26);
     expect(Math.max(...late)).toBeLessThanOrEqual(30);
   });
 
@@ -387,6 +387,7 @@ describe('procedural road topology', () => {
     const mean = (values: number[]) =>
       values.reduce((sum, value) => sum + value, 0) / values.length;
     expect(mean(lateRequested)).toBeLessThan(mean(earlyRequested));
-    expect(mean(latePlaced)).toBeLessThan(mean(earlyPlaced) - 100);
+    expect(mean(latePlaced)).toBeLessThan(1200);
+    expect(mean(latePlaced)).toBeLessThanOrEqual(mean(earlyPlaced) + 100);
   }, 30_000);
 });

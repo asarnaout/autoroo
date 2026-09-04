@@ -40,6 +40,7 @@ import {
   RENDER_POOL_LIMITS,
   ROAD_SIDEWALK_WIDTH_M,
   ROAD_TILE_LENGTH_M,
+  TRAFFIC_RENDER_AHEAD_M,
   activeLanes,
   hasLane,
 } from './constants';
@@ -96,6 +97,8 @@ interface VisualEntry {
   readonly animationPivot: TransformNode | null;
   readonly shadow: Mesh | null;
   readonly kind: VehicleKind | 'scenery';
+  /** Model-specific lift that places its lowest tyre on the road surface. */
+  readonly groundY: number;
   enabled: boolean;
 }
 
@@ -178,15 +181,10 @@ function makeMaterial(
   return result;
 }
 
-function setMaterialColor(material: Material, color: Color3): void {
-  if (material instanceof PBRMaterial) {
-    material.albedoColor = color;
-    material.metallic = 0;
-    material.roughness = 0.78;
-  } else if (material instanceof StandardMaterial) {
-    material.diffuseColor = color;
-    material.specularColor = Color3.Black();
-  }
+function materialAlbedo(material: Material): Color3 {
+  if (material instanceof PBRMaterial) return material.albedoColor;
+  if (material instanceof StandardMaterial) return material.diffuseColor;
+  return Color3.White();
 }
 
 function setVisible(entry: VisualEntry, visible: boolean): void {
@@ -223,7 +221,6 @@ export class BabylonGameSession {
   private disposed = false;
   private ready = false;
   private muted = false;
-  private cameraX = 0;
   private resolutionSampleFrames = 0;
   private resolutionSampleTotalMs = 0;
   private goodFrameStreak = 0;
@@ -298,8 +295,8 @@ export class BabylonGameSession {
       1,
     );
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
-    this.scene.fogStart = 145;
-    this.scene.fogEnd = 265;
+    this.scene.fogStart = 160;
+    this.scene.fogEnd = 280;
     this.scene.fogColor = Color3.FromHexString(NIGHT_PALETTE.fog);
     this.scene.ambientColor = new Color3(0.23, 0.22, 0.26);
     this.scene.skipPointerMovePicking = true;
@@ -915,7 +912,7 @@ export class BabylonGameSession {
             container.dispose();
             return;
           }
-          this.recolorContainer(container, MODEL_CONFIGS[key]);
+          this.prepareContainerMaterials(container, MODEL_CONFIGS[key]);
           this.containers.set(key, container);
         } catch (error) {
           console.warn(`[Autoroo] Could not load ${url}`, error);
@@ -931,42 +928,83 @@ export class BabylonGameSession {
     this.callbacks.onReady();
   }
 
-  private recolorContainer(
+  private prepareContainerMaterials(
     container: AssetContainer,
     config: ModelConfig,
   ): void {
     if (config.bodyMaterials && config.color) {
-      const color = Color3.FromHexString(config.color);
-      for (const material of container.materials) {
-        if (config.bodyMaterials.includes(material.name))
-          setMaterialColor(material, color);
-      }
+      this.prepareVehicleMaterials(container, config);
+      return;
     }
-    this.applyVehicleLightGlow(container, config);
     if (BUILDING_KEYS.includes(config.key as BuildingModelKey))
       this.applyNightWindowGlow(container);
   }
 
-  private applyVehicleLightGlow(
+  /**
+   * Mirrors Curbside Rush's inexpensive vehicle treatment once on each source
+   * container. Every pooled instance keeps sharing this one material set, so
+   * the clearer paint/glass highlights add neither draw calls nor per-car
+   * material allocations.
+   */
+  private prepareVehicleMaterials(
     container: AssetContainer,
     config: ModelConfig,
   ): void {
-    if (!config.headlightMaterials && !config.taillightMaterials) return;
+    const paint = Color3.FromHexString(config.color ?? '#ffffff');
+    const bodyNames = new Set(config.bodyMaterials ?? []);
+    const converted = new Map<Material, StandardMaterial>();
     const headlight = new Color3(0.5, 0.46, 0.3);
     const taillight = new Color3(0.32, 0.03, 0.02);
-    for (const material of container.materials) {
-      let color: Color3 | null = null;
-      if (config.headlightMaterials?.includes(material.name)) color = headlight;
-      else if (config.taillightMaterials?.includes(material.name))
-        color = taillight;
-      if (!color) continue;
-      if (material instanceof PBRMaterial) {
-        material.emissiveColor = color.clone();
-        material.emissiveIntensity = 1;
-      } else if (material instanceof StandardMaterial) {
-        material.emissiveColor = color.clone();
+    for (const mesh of container.meshes) {
+      if (!(mesh instanceof Mesh)) continue;
+      const source = mesh.material;
+      if (!source) continue;
+      let material = converted.get(source);
+      if (!material) {
+        material =
+          source instanceof StandardMaterial
+            ? source
+            : new StandardMaterial(
+                `autoroo-${config.key}-${source.name}`,
+                this.scene,
+              );
+        if (source instanceof PBRMaterial)
+          material.diffuseTexture = source.albedoTexture;
+        material.diffuseColor = bodyNames.has(source.name)
+          ? paint.clone()
+          : materialAlbedo(source).clone();
+        material.alpha = source.alpha;
+        material.backFaceCulling = source.backFaceCulling;
+
+        if (
+          /window|glass|windscreen|windshield/i.test(source.name) ||
+          source.name === '455A64'
+        ) {
+          material.specularColor = new Color3(0.36, 0.36, 0.36);
+          material.specularPower = 72;
+        } else if (
+          /black|wheel|tire|tyre|rubber/i.test(source.name) ||
+          source.name === '1A1A1A'
+        ) {
+          material.specularColor = new Color3(0.05, 0.05, 0.05);
+          material.specularPower = 22;
+        } else {
+          material.specularColor = new Color3(0.22, 0.22, 0.22);
+          material.specularPower = 44;
+        }
+
+        if (config.headlightMaterials?.includes(source.name))
+          material.emissiveColor = headlight.clone();
+        else if (config.taillightMaterials?.includes(source.name))
+          material.emissiveColor = taillight.clone();
+        else if (source instanceof PBRMaterial)
+          material.emissiveColor = source.emissiveColor.clone();
+
+        converted.set(source, material);
       }
+      mesh.material = material;
     }
+    for (const material of converted.values()) material.freeze();
   }
 
   private applyNightWindowGlow(container: AssetContainer): void {
@@ -1022,6 +1060,8 @@ export class BabylonGameSession {
     const instance = container.instantiateModelsToScene(
       (sourceName) => `${name}-${sourceName}`,
       false,
+      // Babylon otherwise clones full meshes; dense traffic must share geometry.
+      { doNotInstantiate: false },
     );
     for (const root of instance.rootNodes) {
       root.parent = modelParent;
@@ -1059,6 +1099,7 @@ export class BabylonGameSession {
       animationPivot,
       shadow: blob,
       kind,
+      groundY: config.groundY,
       enabled: true,
     } satisfies VisualEntry;
     setVisible(entry, false);
@@ -1068,13 +1109,39 @@ export class BabylonGameSession {
   private shadowMaterialCache: StandardMaterial | null = null;
   private shadowMaterial(): StandardMaterial {
     if (!this.shadowMaterialCache) {
+      const size = 128;
+      const texture = new DynamicTexture(
+        'blob-shadow-texture',
+        size,
+        this.scene,
+        false,
+      );
+      const context = texture.getContext();
+      const gradient = context.createRadialGradient(
+        size / 2,
+        size / 2,
+        size * 0.06,
+        size / 2,
+        size / 2,
+        size / 2,
+      );
+      gradient.addColorStop(0, 'rgba(0,0,0,0.5)');
+      gradient.addColorStop(0.55, 'rgba(0,0,0,0.26)');
+      gradient.addColorStop(1, 'rgba(0,0,0,0)');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, size, size);
+      texture.hasAlpha = true;
+      texture.update();
+
       this.shadowMaterialCache = makeMaterial(
         this.scene,
         'blob-shadow-mat',
-        '#080f1b',
-        0.28,
+        '#000000',
       );
+      this.shadowMaterialCache.diffuseTexture = texture;
+      this.shadowMaterialCache.useAlphaFromDiffuseTexture = true;
       this.shadowMaterialCache.disableLighting = true;
+      this.shadowMaterialCache.backFaceCulling = false;
       this.shadowMaterialCache.freeze();
     }
     return this.shadowMaterialCache;
@@ -1217,7 +1284,11 @@ export class BabylonGameSession {
     const jumpPitch = player.airborne ? -player.verticalSpeedMps * 0.004 : 0;
     const playerEntry = this.playerVisual;
     if (playerEntry) {
-      playerEntry.holder.position.set(interpolatedX, visualY, 0);
+      playerEntry.holder.position.set(
+        interpolatedX,
+        playerEntry.groundY + visualY,
+        0,
+      );
       const animationPivot = playerEntry.animationPivot ?? playerEntry.holder;
       animationPivot.rotation.x = jumpPitch;
       animationPivot.rotation.z = lanePose.rollRad;
@@ -1237,10 +1308,11 @@ export class BabylonGameSession {
     this.updateStreetlights(interpolatedPlayerZ);
     this.updateFurniture(interpolatedPlayerZ);
 
-    this.cameraX += (interpolatedX * 0.28 - this.cameraX) * 0.055;
-    this.camera.position.x = this.cameraX;
+    // Keep the eye and its target on the same centreline. Partial, mismatched
+    // lane offsets made the old shot yaw sideways and read as a tilted camera.
+    this.camera.position.x = interpolatedX;
     this.camera.position.y = 9.8 + interpolatedY * 0.12;
-    this.target.set(interpolatedX * 0.55, 1.3 + interpolatedY * 0.16, 27);
+    this.target.set(interpolatedX, 1.3 + interpolatedY * 0.16, 27);
     this.camera.setTarget(this.target);
   }
 
@@ -1290,12 +1362,12 @@ export class BabylonGameSession {
       vehicle.previousZM +
       (vehicle.absoluteZM - vehicle.previousZM) * alpha -
       playerZ;
-    if (z < -75 || z > 285) {
+    if (z < -75 || z > TRAFFIC_RENDER_AHEAD_M) {
       setVisible(entry, false);
       return;
     }
     setVisible(entry, true);
-    entry.holder.position.set(LANE_X[vehicle.lane], 0, z);
+    entry.holder.position.set(LANE_X[vehicle.lane], entry.groundY, z);
     if (entry.shadow) entry.shadow.position.set(LANE_X[vehicle.lane], 0.05, z);
   }
 

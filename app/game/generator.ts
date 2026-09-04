@@ -230,7 +230,7 @@ export function chooseEscapeLane(
   const legal = candidates.length > 0 ? candidates : activeLanes(mask);
   const alternatives = legal.filter((lane) => lane !== previous);
   const previousIsLegal = legal.includes(previous);
-  const changeChance = 0.24 + 0.68 * boundedDifficulty;
+  const changeChance = 0.48 + 0.5 * boundedDifficulty;
   if (
     previousIsLegal &&
     (alternatives.length === 0 ||
@@ -248,30 +248,31 @@ export function ordinaryGapM(
   difficulty: number,
 ): number {
   const boundedDifficulty = Math.max(0, Math.min(1, difficulty));
-  const jitter = (hashUnit(seed, encounterIndex, 97) - 0.5) * 8;
-  return 84 - 58 * boundedDifficulty + jitter;
+  const jitter = (hashUnit(seed, encounterIndex, 97) - 0.5) * 4;
+  // Late rows arrive only 0.93-1.07 seconds apart at maximum closing speed:
+  // just beyond one 0.85 second auto-hop, with little idle landing time. The
+  // exact production witness still rejects any unsafe deterministic draft.
+  return 46 - 18 * boundedDifficulty + jitter;
 }
 
 export function firstGateDistance(seed: number): number {
-  return 760 + hashUnit(seed, 0, 211) * 100;
+  return 650 + hashUnit(seed, 0, 211) * 80;
 }
 
 /**
  * Advances the one live gate cursor in constant time. Gaps smoothly contract
- * from 2,200–2,300 m toward the bounded 1,050–1,150 m cap as distance increases.
- * The late floor leaves room for at least one dense ordinary sequence between
- * neighboring landing and approach reservations.
+ * from roughly 800 m toward a bounded 550–620 m cadence. Road nudging and
+ * the 500 m exclusion still prevent overlap while keeping mixed sequences
+ * recurring instead of kilometre-scale set pieces.
  */
 export function nextGateDistance(
   seed: number,
   gateIndex: number,
   previousPlacedM: number,
 ): number {
-  // Jump-gate reservations deliberately ramp on the original slower curve so
-  // they do not crowd out the much denser ordinary traffic late in a run.
-  const difficulty = 1 - Math.exp(-Math.max(0, previousPlacedM) / 2500);
+  const difficulty = 1 - Math.exp(-Math.max(0, previousPlacedM) / 900);
   const gapM =
-    1050 + 1150 * (1 - difficulty) + hashUnit(seed, gateIndex, 223) * 100;
+    550 + 250 * (1 - difficulty) + hashUnit(seed, gateIndex, 223) * 70;
   return previousPlacedM + gapM;
 }
 
@@ -282,13 +283,33 @@ export function nextGateDistance(
 export function scheduledGateDistance(seed: number, gateIndex: number): number {
   if (gateIndex <= 0) return firstGateDistance(seed);
   const index = Math.floor(gateIndex);
-  const asymptoticProgress = 650 * (1 - Math.exp(-index / 5));
+  const asymptoticProgress = 220 * (1 - Math.exp(-index / 4));
   return (
     firstGateDistance(seed) +
-    index * 535 +
+    index * 550 +
     asymptoticProgress +
-    hashUnit(seed, index, 223) * 15
+    hashUnit(seed, index, 223) * 12
   );
+}
+
+/** First boundary where a particular lane becomes inaccessible. */
+export function nextLaneClosureM(
+  seed: number,
+  distanceM: number,
+  lane: LaneIndex,
+): number {
+  const firstModule = Math.floor(Math.max(0, distanceM) / MODULE_LENGTH_M);
+  for (let offset = 0; offset <= 20; offset += 1) {
+    const transition = roadModuleAt(seed, firstModule + offset).transition;
+    if (
+      transition?.kind === 'remove' &&
+      transition.lane === lane &&
+      transition.warningEndM > distanceM + 1e-9
+    ) {
+      return transition.warningEndM;
+    }
+  }
+  return Number.POSITIVE_INFINITY;
 }
 
 export function isSteadyRoadRange(

@@ -5,17 +5,22 @@ import {
   COAST_DRAG_MPS2,
   FIXED_DT,
   GATE_FORWARD_STEADY_M,
+  GATE_LANDING_CLEAR_M,
   JUMP_APEX_M,
   JUMP_FLIGHT_SECONDS,
   LANE_CHANGE_DURATION_S,
   LANE_CHANGE_TICKS,
   LANE_X,
+  LONGITUDINAL_MARGIN_M,
   MAX_SPEED_MPS,
+  PLAYER_LENGTH_M,
   activeLanes,
   countLanes,
+  hasLane,
 } from '../app/game/constants';
 import type { InputFrame, PlayerState } from '../app/game/contracts';
 import {
+  laneMaskAt,
   nudgeGateToSteadyRoad,
   roadModuleAt,
   roadModuleForDistance,
@@ -29,6 +34,7 @@ import {
   computeGateWindow,
   createTrafficVehicle,
   jumpChainOffsetsM,
+  mixedPressureManeuvers,
   runRenderSchedule,
   verifyJumpCertificate,
 } from '../app/game/simulation';
@@ -499,7 +505,9 @@ describe('lane movement and collision/scoring rules', () => {
     simulation.tick(idle);
 
     expect(simulation.phaseName).toBe('running');
-    expect(simulation.renderTraffic).toHaveLength(0);
+    expect(
+      simulation.renderTraffic.some((vehicle) => vehicle.id === 'retiring-hop'),
+    ).toBe(false);
     expect(simulation.snapshot().bonusScore).toBe(100);
     expect(simulation.drainEvents()).toContainEqual({
       type: 'bonus',
@@ -683,6 +691,43 @@ describe('winnability certificates', () => {
         certificate!,
       ),
     ).toBe(false);
+  }, 30_000);
+
+  it('reserves 0.75 seconds before steering for a newly revealed mixed gate', () => {
+    const seed = 15;
+    const gateZM = gateFor(seed);
+    const gateMask = laneMaskAt(seed, gateZM);
+    const initialTarget = activeLanes(gateMask).find((lane) => lane !== 1)!;
+    const maneuverPlan = mixedPressureManeuvers(
+      seed,
+      0,
+      gateMask,
+      initialTarget,
+      11,
+      0,
+    );
+    const request = {
+      seed,
+      tick: 400,
+      player: player({
+        absoluteZM: gateZM - 110,
+        previousZM: gateZM - 110,
+        speedMps: MAX_SPEED_MPS,
+        maxForwardM: gateZM - 110,
+      }),
+      gateZM,
+      kind: 'sedan' as const,
+      blockerSpeedMps: 0,
+      targetSpeedMps: 28,
+      maneuverPlan,
+    };
+    const certificate = certifyJumpGate(request);
+    expect(certificate).not.toBeNull();
+    const firstSteeringTick = certificate!.witness.find(
+      (point) => point.input.laneDelta !== 0,
+    )?.tick;
+    expect(firstSteeringTick).toBeGreaterThanOrEqual(request.tick + 45);
+    expect(verifyJumpCertificate(request, certificate!)).toBe(true);
   }, 30_000);
 
   it('certifies and binds an exact mid-flip reveal state', () => {
@@ -904,7 +949,7 @@ describe('winnability certificates', () => {
     }
   });
 
-  it('reschedules immediately after an invalid four-candidate gate without stalling', () => {
+  it('reschedules after bounded reveal retries for an invalid gate', () => {
     const seed = 42;
     const transition = Array.from({ length: 20 }, (_, index) =>
       roadModuleAt(seed, index),
@@ -915,10 +960,10 @@ describe('winnability certificates', () => {
     simulation.start();
     simulation.__debugReplaceTraffic([]);
     simulation.__debugSetPlayer({
-      absoluteZM: invalidGateZM - 205,
-      previousZM: invalidGateZM - 205,
+      absoluteZM: invalidGateZM - 110,
+      previousZM: invalidGateZM - 110,
       speedMps: 30,
-      maxForwardM: invalidGateZM - 205,
+      maxForwardM: invalidGateZM - 110,
     });
     simulation.__debugSetGateState({
       gateIndex: 0,
@@ -927,7 +972,13 @@ describe('winnability certificates', () => {
       lastGateZM: 0,
       activeCertificate: null,
     });
-    simulation.tick(accelerate);
+    for (
+      let tick = 0;
+      tick < 180 && simulation.debugGateState().pendingGateZM === invalidGateZM;
+      tick += 1
+    ) {
+      simulation.tick(accelerate);
+    }
     const next = simulation.debugGateState();
     expect(next.pendingGateAttempted).toBe(false);
     expect(next.pendingGateZM).toBeGreaterThanOrEqual(invalidGateZM + 500);
@@ -969,6 +1020,7 @@ describe('winnability certificates', () => {
     simulation.start();
     let sawGate = false;
     let clearedGate = false;
+    let checkedCertifiedLanding = false;
     let widestRoad = simulation.snapshot().laneCount;
     let gateId: string | null = null;
 
@@ -982,8 +1034,30 @@ describe('winnability certificates', () => {
       } else {
         if (gateId) clearedGate = true;
       }
+      const certifiedLandingBoundaryM = certificate
+        ? Math.max(
+            ...snapshot.traffic
+              .filter((vehicle) => vehicle.certificateId === certificate.id)
+              .map(
+                (vehicle) =>
+                  vehicle.absoluteZM +
+                  PLAYER_LENGTH_M / 2 +
+                  vehicle.lengthM / 2 +
+                  LONGITUDINAL_MARGIN_M +
+                  GATE_LANDING_CLEAR_M,
+              ),
+          )
+        : Number.NEGATIVE_INFINITY;
       const input = certificateBotInput(simulation, snapshot);
       simulation.tick(input);
+      const after = simulation.snapshot();
+      if (certificate && after.activeCertificate === null) {
+        expect(after.player.airborne).toBe(false);
+        expect(after.player.absoluteZM).toBeGreaterThan(
+          certifiedLandingBoundaryM,
+        );
+        checkedCertifiedLanding = true;
+      }
       expect(
         simulation.phaseName,
         JSON.stringify({
@@ -1010,6 +1084,7 @@ describe('winnability certificates', () => {
 
     expect(sawGate).toBe(true);
     expect(clearedGate).toBe(true);
+    expect(checkedCertifiedLanding).toBe(true);
     expect(widestRoad).toBe(4);
     expect(simulation.renderPlayer.absoluteZM).toBeGreaterThan(2000);
   }, 30_000);
@@ -1138,7 +1213,7 @@ describe('rear pressure and deterministic render timing', () => {
     ).toBe(true);
   });
 
-  it('retires certified ordinary trajectories before obstacle-free tapers', () => {
+  it('keeps certified traffic on persistent lanes through curved tapers', () => {
     const simulation = new AutorooSimulation(0);
     simulation.start();
     for (let tick = 0; tick < 5000; tick += 1) {
@@ -1169,12 +1244,13 @@ describe('rear pressure and deterministic render timing', () => {
       expect(simulation.phaseName).toBe('running');
       for (const vehicle of simulation.renderTraffic) {
         if (vehicle.role !== 'ordinary') continue;
-        expect(vehicle.retireAtZM).not.toBeNull();
         const roadModule = roadModuleForDistance(0, vehicle.absoluteZM);
-        const insideTaper =
-          roadModule.transition !== null &&
-          vehicle.absoluteZM >= roadModule.transition.warningEndM;
-        expect(insideTaper).toBe(false);
+        if (!roadModule.transition) continue;
+        const persistentMask =
+          roadModule.transition.kind === 'remove'
+            ? roadModule.toLaneMask
+            : roadModule.fromLaneMask;
+        expect(hasLane(persistentMask, vehicle.lane)).toBe(true);
       }
     }
   });
@@ -1212,7 +1288,19 @@ describe('rear pressure and deterministic render timing', () => {
     let sawGate = false;
     for (let tick = 0; tick < totalTicks; tick += 1) {
       const snapshot = source.snapshot();
-      const input = tick < 490 ? idle : certificateBotInput(source, snapshot);
+      const routeInput = certificateBotInput(source, snapshot);
+      const input =
+        tick < 490
+          ? idle
+          : {
+              ...routeInput,
+              // The intentional eight-second stop abandons the original
+              // ground witnesses. Recover by hopping ordinary traffic until
+              // a newly locked mixed certificate takes over exact control.
+              jumpPressed:
+                routeInput.jumpPressed ||
+                (!snapshot.activeCertificate && snapshot.player.speedMps >= 28),
+            };
       trace.push({ ...input });
       source.tick(input);
       const after = source.snapshot();

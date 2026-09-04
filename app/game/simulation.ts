@@ -21,6 +21,8 @@ import {
   PLAYER_LENGTH_M,
   PLAYER_WIDTH_M,
   RENDER_POOL_LIMITS,
+  TRAFFIC_PREGEN_AHEAD_M,
+  TRAFFIC_RENDER_AHEAD_M,
   TIMING_MARGIN_TICKS,
   VEHICLE_DIMENSIONS,
   VERTICAL_CLEARANCE_M,
@@ -31,7 +33,9 @@ import {
   lerp,
 } from './constants';
 import type {
+  ChallengeApproachRoute,
   ChallengeCertificate,
+  ChallengeManeuver,
   GameEvent,
   InputFrame,
   LaneIndex,
@@ -48,21 +52,23 @@ import {
   isSteadyRoadRange,
   laneMaskAt,
   nearestActiveLane,
+  nextLaneClosureM,
   nextGateDistance,
   nextActiveLane,
-  nextTaperStartM,
   nudgeGateToSteadyRoad,
   ordinaryGapM,
   roadModuleForDistance,
 } from './generator';
 import { hashParts, hashUnit, stableHash } from './random';
 
-const FRONT_DRAW_M = 260;
-const GATE_REVEAL_M = 205;
-// Vehicles retire safely before the next taper and the production witness
-// rejects any unsafe row, so this only needs to preserve a generous reaction
-// corridor rather than the old worst-case 20-second trajectory distance.
-const ORDINARY_FORWARD_STEADY_M = 80;
+// Gate rows and ordinary encounters are committed while still behind the fog
+// boundary. Even the last spatial retry stays outside the 285 m render band.
+const GATE_REVEAL_M = 340;
+const GATE_RETRY_STEP_M = 5;
+const GATE_DRAFT_STAGES = 8;
+const GATE_APPROACH_TARGET_FLAG = 1 << 2;
+const POST_GATE_TRAFFIC_START_M = GATE_FORWARD_STEADY_M + 4;
+const MAX_PENDING_GATE_BLOCKERS = 29;
 
 interface GroundRoute {
   certificate: ChallengeCertificate;
@@ -102,7 +108,17 @@ interface GateCandidate {
   readonly blockerSpeedMps: number;
   readonly targetSpeedMps: number;
   readonly attempt: number;
-  readonly rowOffsetsM: readonly number[];
+  readonly approachRoutes: readonly ChallengeApproachRoute[];
+  readonly approachLaneByEncounter: ReadonlyMap<string, LaneIndex>;
+  readonly maneuverPlan: readonly CandidateManeuver[];
+}
+
+interface CandidateManeuver {
+  readonly offsetM: number;
+  readonly blockedLaneMask: number;
+  readonly action: 'jump' | 'dodge';
+  /** Null only for the legacy full-row certification API. */
+  readonly targetLane: LaneIndex | null;
 }
 
 interface WitnessResult {
@@ -111,12 +127,16 @@ interface WitnessResult {
   readonly witnessTraceHash: string;
   readonly verticalClearanceM: number;
   readonly clearedAtTick: number;
+  /** Non-null only when the replay hit one of the mixed gate blockers. */
+  readonly crashedGateBlockerId: string | null;
 }
 
 interface PreparedGateReplays {
   readonly worlds: ReadonlyMap<number, MutableWorldState>;
   readonly prefixWitness: readonly WitnessTracePoint[];
 }
+
+type GateWitnessControl = 'canonical' | 'no-jump' | 'fixed-lane';
 
 const WORLD_JUMPED = 1 << 0;
 const WORLD_CRASHED = 1 << 1;
@@ -125,7 +145,7 @@ const WORLD_REAR_RETIRED = 1 << 3;
 const MAX_PENDING_EVENTS = 64;
 const MAX_WITNESS_TICKS = Math.round(GATE_WITNESS_LIMIT_S / FIXED_DT);
 const TRANSITION_REAR_GRACE_S = 2;
-const MAX_GATE_ROWS = 4;
+const MAX_GATE_ROWS = 20;
 
 function quantize(value: number): number {
   return Math.round(value * 1000);
@@ -138,9 +158,11 @@ function vehicleDimensions(kind: VehicleKind) {
 function gateForwardReservationM(
   kind: VehicleKind,
   blockerSpeedMps: number,
-  rowOffsetsM: readonly number[] = [0],
+  maneuverPlan: readonly Pick<CandidateManeuver, 'offsetM'>[] = [
+    { offsetM: 0 },
+  ],
 ): number {
-  const lastRowOffsetM = rowOffsetsM[rowOffsetsM.length - 1] ?? 0;
+  const lastRowOffsetM = maneuverPlan[maneuverPlan.length - 1]?.offsetM ?? 0;
   return (
     lastRowOffsetM +
     Math.max(0, blockerSpeedMps) * GATE_WITNESS_LIMIT_S +
@@ -151,25 +173,79 @@ function gateForwardReservationM(
   );
 }
 
-function normalizeGateRowOffsets(
+function normalizeGateManeuverPlan(
+  gateMask: number,
   rowOffsetsM: readonly number[] | undefined,
-): readonly number[] | null {
-  const offsets = rowOffsetsM ?? [0];
-  if (offsets.length === 0 || offsets.length > MAX_GATE_ROWS) return null;
-  const normalized: number[] = [];
-  for (let index = 0; index < offsets.length; index += 1) {
-    const offsetM = offsets[index];
+  maneuverPlan: readonly ChallengeManeuver[] | undefined,
+): readonly CandidateManeuver[] | null {
+  if (maneuverPlan && rowOffsetsM) return null;
+  const source: readonly CandidateManeuver[] = maneuverPlan
+    ? maneuverPlan
+    : (rowOffsetsM ?? [0]).map((offsetM) => ({
+        offsetM,
+        blockedLaneMask: gateMask,
+        action: 'jump' as const,
+        targetLane: null,
+      }));
+  if (source.length === 0 || source.length > MAX_GATE_ROWS) return null;
+  const normalized: CandidateManeuver[] = [];
+  let hasJump = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const maneuver = source[index];
+    const offsetM = maneuver.offsetM;
     if (
       !Number.isFinite(offsetM) ||
       offsetM < 0 ||
       (index === 0 && Math.abs(offsetM) > 1e-9) ||
-      (index > 0 && offsetM - normalized[index - 1] < 12)
+      (index > 0 && offsetM - normalized[index - 1].offsetM < 10) ||
+      !Number.isInteger(maneuver.blockedLaneMask) ||
+      maneuver.blockedLaneMask <= 0 ||
+      (maneuver.blockedLaneMask & ~gateMask) !== 0 ||
+      (maneuver.action !== 'jump' && maneuver.action !== 'dodge') ||
+      (maneuver.targetLane !== null &&
+        !hasLane(gateMask, maneuver.targetLane)) ||
+      (maneuver.action === 'dodge' &&
+        maneuver.targetLane !== null &&
+        hasLane(maneuver.blockedLaneMask, maneuver.targetLane)) ||
+      (maneuver.action === 'jump' && maneuver.blockedLaneMask !== gateMask) ||
+      (maneuver.action === 'dodge' && maneuver.targetLane === null)
     ) {
       return null;
     }
-    normalized.push(offsetM);
+    hasJump ||= maneuver.action === 'jump';
+    normalized.push(Object.freeze({ ...maneuver }));
   }
-  if ((normalized.at(-1) ?? 0) > 90) return null;
+  if ((normalized.at(-1)?.offsetM ?? 0) > 300 || !hasJump) return null;
+  return Object.freeze(normalized);
+}
+
+function normalizeApproachRoutes(
+  routes: readonly ChallengeApproachRoute[] | undefined,
+): readonly ChallengeApproachRoute[] | null {
+  if (!routes) return Object.freeze([]);
+  const seen = new Set<string>();
+  const normalized: ChallengeApproachRoute[] = [];
+  for (const route of routes) {
+    if (
+      typeof route.encounterId !== 'string' ||
+      route.encounterId.length === 0 ||
+      seen.has(route.encounterId) ||
+      !Number.isInteger(route.targetLane) ||
+      route.targetLane < 0 ||
+      route.targetLane > 3
+    ) {
+      return null;
+    }
+    seen.add(route.encounterId);
+    normalized.push(Object.freeze({ ...route }));
+  }
+  normalized.sort((first, second) =>
+    first.encounterId < second.encounterId
+      ? -1
+      : first.encounterId > second.encounterId
+        ? 1
+        : 0,
+  );
   return Object.freeze(normalized);
 }
 
@@ -186,6 +262,76 @@ export function jumpChainOffsetsM(
   return Object.freeze(
     Array.from({ length: count }, (_, index) => index * spacingM),
   );
+}
+
+/**
+ * Interleaves apex-height full rows with low landing beats. Each landing beat
+ * blocks the lane used for the preceding jump and only then unlocks an
+ * adjacent target, so a fixed-lane held jump is not a winning trace.
+ */
+export function mixedPressureManeuvers(
+  seed: number,
+  sequenceIndex: number,
+  gateMask: number,
+  startingLane: LaneIndex,
+  rowCount: number,
+  blockerSpeedMps: number,
+  jumpStride = 2,
+): readonly ChallengeManeuver[] {
+  const lanes = activeLanes(gateMask);
+  const count = Math.max(3, Math.min(MAX_GATE_ROWS, Math.floor(rowCount)));
+  const relativeSpeedMps = Math.max(0, MAX_SPEED_MPS - blockerSpeedMps);
+  const hopCycleS = Math.ceil(JUMP_FLIGHT_SECONDS / FIXED_DT) * FIXED_DT;
+  const halfBeatM = (relativeSpeedMps * hopCycleS) / 2;
+  let targetLane = nearestActiveLane(gateMask, startingLane);
+  let direction: -1 | 1 =
+    hashParts(seed, sequenceIndex, 431) % 2 === 0 ? -1 : 1;
+  const plan: ChallengeManeuver[] = [];
+
+  for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
+    const isJumpBeat = rowIndex % Math.max(2, Math.floor(jumpStride)) === 0;
+    if (isJumpBeat) {
+      plan.push(
+        Object.freeze({
+          offsetM: rowIndex * halfBeatM,
+          blockedLaneMask: gateMask,
+          action: 'jump' as const,
+          targetLane,
+        }),
+      );
+      continue;
+    }
+
+    const previousLane = targetLane;
+    const changesLane = rowIndex % 2 === 1;
+    let blockedLane = lanes.find((lane) => lane !== targetLane) ?? targetLane;
+    if (changesLane) {
+      let nextLane = (previousLane + direction) as LaneIndex;
+      if (!lanes.includes(nextLane)) {
+        direction = direction === 1 ? -1 : 1;
+        nextLane = (previousLane + direction) as LaneIndex;
+      }
+      if (!lanes.includes(nextLane)) {
+        const alternatives = lanes.filter((lane) => lane !== previousLane);
+        nextLane = alternatives[0] ?? previousLane;
+      }
+      targetLane = nextLane;
+      blockedLane = previousLane;
+    }
+    // Alternating focused traps demand one decisive lane flip per hop cycle;
+    // the rows between them keep the jam visually packed without requiring an
+    // unrealistic new steering command every half-hop.
+    const blockedLaneMask = 1 << blockedLane;
+    plan.push(
+      Object.freeze({
+        offsetM: rowIndex * halfBeatM,
+        blockedLaneMask,
+        action: 'dodge' as const,
+        targetLane,
+      }),
+    );
+  }
+  return Object.freeze(plan);
 }
 
 export function createTrafficVehicle(
@@ -539,9 +685,20 @@ function canonicalCertificate(
     certificate.dependencyHash,
     certificate.targetLane,
     certificate.selectedVehicle,
+    certificate.approachRoutes.map((route) => [
+      route.encounterId,
+      route.targetLane,
+    ]),
+    certificate.maneuverPlan.map((maneuver) => [
+      exactNumber(maneuver.offsetM),
+      maneuver.blockedLaneMask,
+      maneuver.action,
+      maneuver.targetLane,
+    ]),
     [...certificate.blockerIds],
     certificate.blockerTrajectories.map((trajectory) => [
       trajectory.id,
+      trajectory.encounterId,
       trajectory.lane,
       trajectory.startTick,
       exactNumber(trajectory.startZM),
@@ -602,7 +759,13 @@ function stateDependencyHash(
   trajectories: ChallengeCertificate['blockerTrajectories'],
 ): string {
   const firstModule = Math.floor(
-    Math.max(0, candidate.gateZM - GATE_APPROACH_CLEAR_M) / MODULE_LENGTH_M,
+    Math.max(
+      0,
+      Math.min(
+        world.player.absoluteZM,
+        candidate.gateZM - GATE_APPROACH_CLEAR_M,
+      ),
+    ) / MODULE_LENGTH_M,
   );
   const lastModule = Math.floor(
     Math.max(
@@ -611,7 +774,7 @@ function stateDependencyHash(
         gateForwardReservationM(
           candidate.kind,
           candidate.blockerSpeedMps,
-          candidate.rowOffsetsM,
+          candidate.maneuverPlan,
         ),
     ) / MODULE_LENGTH_M,
   );
@@ -637,10 +800,20 @@ function stateDependencyHash(
       candidate.kind,
       exactNumber(candidate.blockerSpeedMps),
       exactNumber(candidate.targetSpeedMps),
-      candidate.rowOffsetsM.map(exactNumber),
+      candidate.approachRoutes.map((route) => [
+        route.encounterId,
+        route.targetLane,
+      ]),
+      candidate.maneuverPlan.map((maneuver) => [
+        exactNumber(maneuver.offsetM),
+        maneuver.blockedLaneMask,
+        maneuver.action,
+        maneuver.targetLane,
+      ]),
       road,
       trajectories.map((trajectory) => [
         trajectory.id,
+        trajectory.encounterId,
         trajectory.lane,
         trajectory.startTick,
         exactNumber(trajectory.startZM),
@@ -886,10 +1059,11 @@ function witnessInput(
   localTick: number,
   jumpTick: number | null,
   holdJump = false,
+  continuingRevealedRoute = false,
 ): InputFrame {
   let laneDelta: -1 | 0 | 1 = 0;
   if (
-    localTick >= 45 &&
+    (localTick >= 45 || continuingRevealedRoute) &&
     localTick % LANE_COMMAND_INTERVAL_TICKS === 0 &&
     player.lane !== targetLane &&
     player.queuedLane !== targetLane
@@ -923,6 +1097,10 @@ function traceHash(witness: readonly WitnessTracePoint[]): string {
 function freezeCertificate(
   certificate: ChallengeCertificate,
 ): ChallengeCertificate {
+  for (const route of certificate.approachRoutes) Object.freeze(route);
+  Object.freeze(certificate.approachRoutes);
+  for (const maneuver of certificate.maneuverPlan) Object.freeze(maneuver);
+  Object.freeze(certificate.maneuverPlan);
   for (const trajectory of certificate.blockerTrajectories)
     Object.freeze(trajectory);
   Object.freeze(certificate.blockerTrajectories);
@@ -933,6 +1111,24 @@ function freezeCertificate(
   Object.freeze(certificate.witness);
   Object.freeze(certificate.blockerIds);
   return Object.freeze(certificate);
+}
+
+function resolvedManeuverPlan(
+  candidate: GateCandidate,
+  initialTargetLane: LaneIndex,
+): readonly ChallengeManeuver[] {
+  let targetLane = initialTargetLane;
+  return Object.freeze(
+    candidate.maneuverPlan.map((maneuver) => {
+      targetLane = maneuver.targetLane ?? targetLane;
+      return Object.freeze({
+        offsetM: maneuver.offsetM,
+        blockedLaneMask: maneuver.blockedLaneMask,
+        action: maneuver.action,
+        targetLane,
+      });
+    }),
+  );
 }
 
 function certifyGate(
@@ -951,16 +1147,39 @@ function certifyGate(
   targetSpeedMps: number,
   attempt: number,
   rowOffsetsM: readonly number[] | undefined,
+  requestedManeuverPlan: readonly ChallengeManeuver[] | undefined,
+  requestedApproachRoutes: readonly ChallengeApproachRoute[] | undefined,
 ): ChallengeCertificate | null {
-  const normalizedRowOffsetsM = normalizeGateRowOffsets(rowOffsetsM);
-  if (normalizedRowOffsetsM === null) return null;
+  if (
+    !Number.isFinite(gateZM) ||
+    !Number.isFinite(blockerSpeedMps) ||
+    blockerSpeedMps < 0 ||
+    !Number.isFinite(targetSpeedMps) ||
+    targetSpeedMps < 0 ||
+    targetSpeedMps > MAX_SPEED_MPS
+  ) {
+    return null;
+  }
+  const gateMask = laneMaskAt(seed, gateZM);
+  const normalizedManeuverPlan = normalizeGateManeuverPlan(
+    gateMask,
+    rowOffsetsM,
+    requestedManeuverPlan,
+  );
+  if (normalizedManeuverPlan === null) return null;
+  const approachRoutes = normalizeApproachRoutes(requestedApproachRoutes);
+  if (approachRoutes === null) return null;
   const candidate: GateCandidate = {
     gateZM,
     kind,
     blockerSpeedMps,
     targetSpeedMps,
     attempt,
-    rowOffsetsM: normalizedRowOffsetsM,
+    approachRoutes,
+    approachLaneByEncounter: new Map(
+      approachRoutes.map((route) => [route.encounterId, route.targetLane]),
+    ),
+    maneuverPlan: normalizedManeuverPlan,
   };
   const revealWorld: MutableWorldState = {
     seed,
@@ -978,39 +1197,36 @@ function certifyGate(
   const forwardReservationM = gateForwardReservationM(
     kind,
     blockerSpeedMps,
-    candidate.rowOffsetsM,
+    candidate.maneuverPlan,
   );
   if (forwardReservationM > GATE_FORWARD_STEADY_M) return null;
   if (
-    !Number.isFinite(gateZM) ||
-    !Number.isFinite(blockerSpeedMps) ||
-    blockerSpeedMps < 0 ||
-    !Number.isFinite(targetSpeedMps) ||
-    targetSpeedMps < 0 ||
-    targetSpeedMps > MAX_SPEED_MPS ||
     !isSteadyRoadRange(
       seed,
       gateZM - GATE_APPROACH_CLEAR_M,
       gateZM + forwardReservationM,
-    ) ||
-    !gateReservationIsClear(traffic, gateZM, forwardReservationM)
+    )
   ) {
     return null;
   }
   const targetMath = computeGateWindow(kind, blockerSpeedMps, targetSpeedMps);
   if (!targetMath.feasible || targetMath.minimumSpeedMps > 28) return null;
 
-  const gateMask = laneMaskAt(seed, gateZM);
   const lanes = activeLanes(gateMask);
-  const targetLanes = [...lanes].sort((first, second) => {
-    const distance =
-      Math.abs(LANE_X[first] - player.xM) -
-      Math.abs(LANE_X[second] - player.xM);
-    return distance === 0 ? first - second : distance;
-  });
+  const requestedInitialTarget = candidate.maneuverPlan[0]?.targetLane;
+  const targetLanes =
+    requestedInitialTarget === null
+      ? [...lanes].sort((first, second) => {
+          const distance =
+            Math.abs(LANE_X[first] - player.xM) -
+            Math.abs(LANE_X[second] - player.xM);
+          return distance === 0 ? first - second : distance;
+        })
+      : [requestedInitialTarget];
   const blockers = makeGateBlockers(revealWorld, candidate, lanes);
   const trajectories = blockers.map((blocker) => ({
     id: blocker.id,
+    encounterId: blocker.encounterId,
     lane: blocker.lane,
     startTick: tick,
     startZM: blocker.absoluteZM,
@@ -1043,11 +1259,11 @@ function certifyGate(
       // ticks would add synchronous work to the reveal frame without improving
       // the contract.
       const certifiedStart =
-        candidate.rowOffsetsM.length > 1
+        candidate.maneuverPlan.length > 1
           ? Math.floor((runStart + runEnd - requiredTickSpan) / 2)
           : runStart;
       const certifiedEnd =
-        candidate.rowOffsetsM.length > 1
+        candidate.maneuverPlan.length > 1
           ? certifiedStart + requiredTickSpan
           : runEnd;
       const jumpTick = Math.floor((certifiedStart + certifiedEnd) / 2);
@@ -1057,14 +1273,14 @@ function certifyGate(
       let certifiedClearanceM = Number.POSITIVE_INFINITY;
       let allTakeoffTicksPass = true;
       const replayTicks =
-        candidate.rowOffsetsM.length > 1
+        candidate.maneuverPlan.length > 1
           ? Array.from(
               { length: certifiedEnd - certifiedStart + 1 },
               (_, replayIndex) => certifiedStart + replayIndex,
             )
           : [certifiedStart, certifiedEnd];
       const preparedReplays =
-        candidate.rowOffsetsM.length > 1
+        candidate.maneuverPlan.length > 1
           ? prepareGateReplayWorlds(
               revealWorld,
               candidate,
@@ -1124,6 +1340,38 @@ function certifyGate(
       );
       if (!selectedReplay.success) continue;
 
+      const maneuverPlan = resolvedManeuverPlan(candidate, targetLane);
+      const isMixed = maneuverPlan.some(
+        (maneuver) => maneuver.action === 'dodge',
+      );
+      if (isMixed) {
+        const noJumpReplay = simulateGateWitness(
+          revealWorld,
+          candidate,
+          targetLane,
+          jumpTick,
+          false,
+          'no-jump',
+        );
+        const fixedLaneReplay = simulateGateWitness(
+          revealWorld,
+          candidate,
+          targetLane,
+          jumpTick,
+          false,
+          'fixed-lane',
+        );
+        if (
+          noJumpReplay.success ||
+          fixedLaneReplay.success ||
+          noJumpReplay.crashedGateBlockerId === null ||
+          fixedLaneReplay.crashedGateBlockerId === null ||
+          !selectedReplay.witness.some((point) => point.input.laneDelta !== 0)
+        ) {
+          continue;
+        }
+      }
+
       const lockedStateHash = hashLockedWorld(revealWorld);
       const dependencyHash = stateDependencyHash(
         revealWorld,
@@ -1139,8 +1387,10 @@ function certifyGate(
         revealTick: tick,
         lockedStateHash,
         dependencyHash,
-        targetLane,
+        targetLane: maneuverPlan.at(-1)?.targetLane ?? targetLane,
         selectedVehicle: kind,
+        approachRoutes,
+        maneuverPlan,
         blockerIds: blockers.map((blocker) => blocker.id),
         blockerTrajectories: trajectories,
         safeTakeoffTickMin: tick + certifiedStart,
@@ -1162,21 +1412,6 @@ function certifyGate(
   return null;
 }
 
-function gateReservationIsClear(
-  traffic: readonly TrafficVehicle[],
-  gateZM: number,
-  forwardReservationM: number,
-): boolean {
-  const startM = gateZM - GATE_APPROACH_CLEAR_M;
-  const endM = gateZM + forwardReservationM;
-  return !traffic.some(
-    (vehicle) =>
-      vehicle.role === 'ordinary' &&
-      Math.max(vehicle.previousZM, vehicle.absoluteZM) >= startM &&
-      Math.min(vehicle.previousZM, vehicle.absoluteZM) <= endM,
-  );
-}
-
 function makeGateBlockers(
   world: MutableWorldState,
   candidate: GateCandidate,
@@ -1185,12 +1420,14 @@ function makeGateBlockers(
   const blockers: TrafficVehicle[] = [];
   for (
     let rowIndex = 0;
-    rowIndex < candidate.rowOffsetsM.length;
+    rowIndex < candidate.maneuverPlan.length;
     rowIndex += 1
   ) {
-    const rowZM = candidate.gateZM + candidate.rowOffsetsM[rowIndex];
+    const maneuver = candidate.maneuverPlan[rowIndex];
+    const rowZM = candidate.gateZM + maneuver.offsetM;
     const encounterId = `gate-${world.tickNumber}-${candidate.attempt}-${rowIndex}`;
     for (const lane of lanes) {
+      if (!hasLane(maneuver.blockedLaneMask, lane)) continue;
       blockers.push(
         createTrafficVehicle(
           `${encounterId}-${lane}`,
@@ -1207,18 +1444,107 @@ function makeGateBlockers(
   return blockers;
 }
 
+/**
+ * Returns a lane in the low two bits and marks previously revealed approach
+ * traffic with bit two. The numeric directive avoids allocating an object on
+ * every tick of the bounded reveal validator.
+ */
+function gateLaneDirectiveAt(
+  candidate: GateCandidate,
+  initialTargetLane: LaneIndex,
+  player: Readonly<PlayerState>,
+  localTick: number,
+  traffic: readonly TrafficVehicle[],
+): number {
+  let targetLane = initialTargetLane;
+  const passExtentM =
+    PLAYER_LENGTH_M / 2 +
+    vehicleDimensions(candidate.kind).lengthM / 2 +
+    LONGITUDINAL_MARGIN_M;
+  let nextGateRowZM = Number.POSITIVE_INFINITY;
+  let nextGateTarget = targetLane;
+  for (const maneuver of candidate.maneuverPlan) {
+    targetLane = maneuver.targetLane ?? targetLane;
+    nextGateTarget = targetLane;
+    const rowZM =
+      candidate.gateZM +
+      maneuver.offsetM +
+      candidate.blockerSpeedMps * localTick * FIXED_DT;
+    if (player.absoluteZM <= rowZM + passExtentM) {
+      nextGateRowZM = rowZM;
+      nextGateTarget = targetLane;
+      break;
+    }
+  }
+
+  let nextOrdinaryZM = Number.POSITIVE_INFINITY;
+  let nextOrdinaryTarget: LaneIndex | null = null;
+  for (const vehicle of traffic) {
+    if (vehicle.role !== 'ordinary') continue;
+    const approachTarget = candidate.approachLaneByEncounter.get(
+      vehicle.encounterId,
+    );
+    if (approachTarget === undefined) continue;
+    const passBoundaryM =
+      vehicle.absoluteZM +
+      PLAYER_LENGTH_M / 2 +
+      vehicle.lengthM / 2 +
+      LONGITUDINAL_MARGIN_M;
+    if (
+      passBoundaryM < player.absoluteZM ||
+      vehicle.absoluteZM >= nextOrdinaryZM
+    ) {
+      continue;
+    }
+    nextOrdinaryZM = vehicle.absoluteZM;
+    nextOrdinaryTarget = approachTarget;
+  }
+
+  return nextOrdinaryTarget !== null && nextOrdinaryZM < nextGateRowZM
+    ? nextOrdinaryTarget | GATE_APPROACH_TARGET_FLAG
+    : nextGateTarget;
+}
+
+/** Traffic only uses lanes that remain physically straight through a taper. */
+function trafficLaneMaskAt(seed: number, distanceM: number): number {
+  const roadModule = roadModuleForDistance(seed, distanceM);
+  if (!roadModule.transition) return laneMaskAt(seed, distanceM);
+  return roadModule.transition.kind === 'remove'
+    ? roadModule.toLaneMask
+    : roadModule.fromLaneMask;
+}
+
 function plausibleTakeoffTicks(
   revealWorld: MutableWorldState,
   candidate: GateCandidate,
   targetLane: LaneIndex,
 ): number[] {
-  const player = clonePlayer(revealWorld.player);
+  const world = cloneWorld(revealWorld);
   const result: number[] = [];
   for (let localTick = 0; localTick < MAX_WITNESS_TICKS; localTick += 1) {
-    const input = witnessInput(player, targetLane, localTick, null);
-    applyInputLane(player, input, revealWorld.seed);
-    if (!player.airborne && isPlayerCenteredInLane(player, targetLane)) {
-      const preview = clonePlayer(player);
+    const laneDirective = gateLaneDirectiveAt(
+      candidate,
+      targetLane,
+      world.player,
+      localTick,
+      world.traffic,
+    );
+    const desiredLane = (laneDirective & 0b11) as LaneIndex;
+    const input = witnessInput(
+      world.player,
+      desiredLane,
+      localTick,
+      null,
+      false,
+      (laneDirective & GATE_APPROACH_TARGET_FLAG) !== 0,
+    );
+    const lanePreview = clonePlayer(world.player);
+    applyInputLane(lanePreview, input, world.seed);
+    if (
+      !lanePreview.airborne &&
+      isPlayerCenteredInLane(lanePreview, targetLane)
+    ) {
+      const preview = clonePlayer(lanePreview);
       advancePlayerPhysics(preview, { ...input, jumpPressed: true });
       const blockerZM =
         candidate.gateZM + candidate.blockerSpeedMps * localTick * FIXED_DT;
@@ -1227,7 +1553,7 @@ function plausibleTakeoffTicks(
         candidate.blockerSpeedMps,
         preview.takeoffSpeedMps,
       );
-      const separationM = blockerZM - player.absoluteZM;
+      const separationM = blockerZM - lanePreview.absoluteZM;
       if (
         math.feasible &&
         preview.takeoffSpeedMps >= candidate.targetSpeedMps - 0.001 &&
@@ -1237,12 +1563,12 @@ function plausibleTakeoffTicks(
         result.push(localTick);
       }
     }
-    advancePlayerPhysics(player, input);
-    const mask = laneMaskAt(revealWorld.seed, player.absoluteZM);
-    enforceActiveLaneTarget(player, mask);
+    const outcome = stepWorld(world, input);
+    if ((outcome & WORLD_CRASHED) !== 0) break;
+    retireCompletedOrdinaryTrajectories(world);
     const blockerZM =
       candidate.gateZM + candidate.blockerSpeedMps * (localTick + 1) * FIXED_DT;
-    if (player.absoluteZM > blockerZM + 100) break;
+    if (world.player.absoluteZM > blockerZM + 100) break;
   }
   return result;
 }
@@ -1269,7 +1595,22 @@ function prepareGateReplayWorlds(
   for (let localTick = 0; localTick <= lastWantedTick; localTick += 1) {
     if (wantedTicks.has(localTick)) prepared.set(localTick, cloneWorld(world));
     if (localTick === lastWantedTick) break;
-    const input = witnessInput(world.player, targetLane, localTick, null);
+    const laneDirective = gateLaneDirectiveAt(
+      candidate,
+      targetLane,
+      world.player,
+      localTick,
+      world.traffic,
+    );
+    const desiredLane = (laneDirective & 0b11) as LaneIndex;
+    const input = witnessInput(
+      world.player,
+      desiredLane,
+      localTick,
+      null,
+      false,
+      (laneDirective & GATE_APPROACH_TARGET_FLAG) !== 0,
+    );
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
     if (
@@ -1300,6 +1641,7 @@ function continueGateWitness(
   jumpTick: number,
   startLocalTick: number,
   recordTrace: boolean,
+  control: GateWitnessControl = 'canonical',
 ): WitnessResult {
   const witness: WitnessTracePoint[] = [];
   let minimumVerticalClearanceM = Number.POSITIVE_INFINITY;
@@ -1309,12 +1651,27 @@ function continueGateWitness(
     localTick < MAX_WITNESS_TICKS;
     localTick += 1
   ) {
+    const laneDirective = gateLaneDirectiveAt(
+      candidate,
+      targetLane,
+      world.player,
+      localTick,
+      world.traffic,
+    );
+    const continuingApproach =
+      (laneDirective & GATE_APPROACH_TARGET_FLAG) !== 0;
+    const routedLane = (laneDirective & 0b11) as LaneIndex;
+    // The fixed-lane sabotage still follows already-revealed approach rows;
+    // it freezes only once the new mixed sequence becomes the next threat.
+    const desiredLane =
+      control === 'fixed-lane' && !continuingApproach ? targetLane : routedLane;
     const input = witnessInput(
       world.player,
-      targetLane,
+      desiredLane,
       localTick,
-      jumpTick,
-      candidate.rowOffsetsM.length > 1,
+      control === 'no-jump' ? null : jumpTick,
+      control !== 'no-jump' && candidate.maneuverPlan.length > 1,
+      continuingApproach,
     );
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
@@ -1342,12 +1699,22 @@ function continueGateWitness(
       });
     }
     if ((outcome & WORLD_CRASHED) !== 0) {
+      let crashedGateBlockerId: string | null = null;
+      for (const blocker of blockers) {
+        if (
+          collidesSwept(world.player, blocker) &&
+          (crashedGateBlockerId === null || blocker.id < crashedGateBlockerId)
+        ) {
+          crashedGateBlockerId = blocker.id;
+        }
+      }
       return {
         success: false,
         witness,
         witnessTraceHash: traceHash(witness),
         verticalClearanceM: minimumVerticalClearanceM,
         clearedAtTick: world.tickNumber,
+        crashedGateBlockerId,
       };
     }
     retireCompletedOrdinaryTrajectories(world);
@@ -1368,6 +1735,7 @@ function continueGateWitness(
         witnessTraceHash: traceHash(witness),
         verticalClearanceM: minimumVerticalClearanceM,
         clearedAtTick: world.tickNumber,
+        crashedGateBlockerId: null,
       };
     }
   }
@@ -1377,6 +1745,7 @@ function continueGateWitness(
     witnessTraceHash: traceHash(witness),
     verticalClearanceM: minimumVerticalClearanceM,
     clearedAtTick: world.tickNumber,
+    crashedGateBlockerId: null,
   };
 }
 
@@ -1386,6 +1755,7 @@ function simulateGateWitness(
   targetLane: LaneIndex,
   jumpTick: number,
   recordTrace: boolean,
+  control: GateWitnessControl = 'canonical',
 ): WitnessResult {
   const world = cloneWorld(revealWorld);
   const blockers = makeGateBlockers(
@@ -1402,15 +1772,41 @@ function simulateGateWitness(
     jumpTick,
     0,
     recordTrace,
+    control,
   );
+}
+
+function activeGateTarget(
+  certificate: ChallengeCertificate,
+  world: MutableWorldState,
+): { readonly lane: LaneIndex; readonly rowZM: number } | null {
+  const firstTrajectory = certificate.blockerTrajectories[0];
+  if (!firstTrajectory) return null;
+  const elapsedTicks = Math.max(0, world.tickNumber - certificate.revealTick);
+  const passExtentM =
+    PLAYER_LENGTH_M / 2 +
+    vehicleDimensions(certificate.selectedVehicle).lengthM / 2 +
+    LONGITUDINAL_MARGIN_M;
+  for (const maneuver of certificate.maneuverPlan) {
+    const rowZM =
+      firstTrajectory.startZM +
+      maneuver.offsetM +
+      firstTrajectory.speedMps * elapsedTicks * FIXED_DT;
+    if (rowZM + passExtentM >= world.player.absoluteZM) {
+      return { lane: maneuver.targetLane, rowZM };
+    }
+  }
+  return null;
 }
 
 function simulateGroundWitness(
   revealWorld: MutableWorldState,
   draftedBlockers: readonly TrafficVehicle[],
   routeTargets: ReadonlyMap<string, LaneIndex>,
+  activeCertificate: ChallengeCertificate | null = null,
 ): WitnessResult {
   const world = cloneWorld(revealWorld);
+  const newEncounterId = draftedBlockers[0]?.encounterId ?? '';
   const blockerIds = new Set(draftedBlockers.map((vehicle) => vehicle.id));
   const passedBlockerIds = new Set<string>();
   world.traffic.push(...draftedBlockers.map(cloneTraffic));
@@ -1427,14 +1823,25 @@ function simulateGroundWitness(
       if (nearest === null || vehicle.absoluteZM < nearest.absoluteZM)
         nearest = vehicle;
     }
-    if (nearest)
+    const gateTarget = activeCertificate
+      ? activeGateTarget(activeCertificate, world)
+      : null;
+    const followingGate =
+      gateTarget !== null &&
+      (nearest === null || gateTarget.rowZM <= nearest.absoluteZM);
+    if (followingGate) desiredLane = gateTarget.lane;
+    else if (nearest)
       desiredLane = routeTargets.get(nearest.encounterId) ?? desiredLane;
     const mask = laneMaskAt(world.seed, world.player.absoluteZM);
     if (!hasLane(mask, desiredLane))
       desiredLane = nearestActiveLane(mask, desiredLane);
     let laneDelta: -1 | 0 | 1 = 0;
     if (
-      localTick >= 45 &&
+      // Existing rows were revealed on earlier ticks, so their route may keep
+      // progressing immediately. The newly drafted row gets the full 0.75 s.
+      (followingGate ||
+        localTick >= 45 ||
+        nearest?.encounterId !== newEncounterId) &&
       localTick % LANE_COMMAND_INTERVAL_TICKS === 0 &&
       world.player.lane !== desiredLane &&
       world.player.queuedLane !== desiredLane
@@ -1443,10 +1850,18 @@ function simulateGroundWitness(
       laneDelta = commandOrigin < desiredLane ? 1 : -1;
     }
     const input: InputFrame = {
-      accelerate: localTick >= 45,
+      accelerate: followingGate || localTick >= 45,
       brake: false,
       laneDelta,
-      jumpPressed: false,
+      jumpPressed:
+        followingGate &&
+        activeCertificate !== null &&
+        world.tickNumber >=
+          Math.floor(
+            (activeCertificate.safeTakeoffTickMin +
+              activeCertificate.safeTakeoffTickMax) /
+              2,
+          ),
     };
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
@@ -1468,6 +1883,7 @@ function simulateGroundWitness(
         witnessTraceHash: traceHash(witness),
         verticalClearanceM: 0,
         clearedAtTick: world.tickNumber,
+        crashedGateBlockerId: null,
       };
     }
     for (const vehicle of world.traffic) {
@@ -1491,6 +1907,7 @@ function simulateGroundWitness(
           witnessTraceHash: traceHash(witness),
           verticalClearanceM: 0,
           clearedAtTick: world.tickNumber,
+          crashedGateBlockerId: null,
         };
       }
     }
@@ -1502,6 +1919,7 @@ function simulateGroundWitness(
         witnessTraceHash: traceHash(witness),
         verticalClearanceM: 0,
         clearedAtTick: world.tickNumber,
+        crashedGateBlockerId: null,
       };
     }
   }
@@ -1511,6 +1929,7 @@ function simulateGroundWitness(
     witnessTraceHash: traceHash(witness),
     verticalClearanceM: 0,
     clearedAtTick: world.tickNumber,
+    crashedGateBlockerId: null,
   };
 }
 
@@ -1531,6 +1950,10 @@ export interface GateCertificationRequest {
   readonly attempt?: number;
   /** Full-lane row centres relative to gateZM; the first row is always zero. */
   readonly rowOffsetsM?: readonly number[];
+  /** Explicit mixed pressure plan. Mutually exclusive with rowOffsetsM. */
+  readonly maneuverPlan?: readonly ChallengeManeuver[];
+  /** Locked escape routes for ordinary traffic already ahead at reveal. */
+  readonly approachRoutes?: readonly ChallengeApproachRoute[];
 }
 
 export function certifyJumpGate(
@@ -1554,6 +1977,8 @@ export function certifyJumpGate(
     request.targetSpeedMps,
     request.attempt ?? 0,
     request.rowOffsetsM,
+    request.maneuverPlan,
+    request.approachRoutes,
   );
 }
 
@@ -1581,15 +2006,26 @@ export function verifyJumpCertificate(
       rearWarning: request.rearWarning ?? false,
     },
   };
-  const rowOffsetsM = normalizeGateRowOffsets(request.rowOffsetsM);
-  if (rowOffsetsM === null) return false;
+  const gateMask = laneMaskAt(world.seed, request.gateZM);
+  const maneuverPlan = normalizeGateManeuverPlan(
+    gateMask,
+    request.rowOffsetsM,
+    request.maneuverPlan,
+  );
+  if (maneuverPlan === null) return false;
+  const approachRoutes = normalizeApproachRoutes(request.approachRoutes);
+  if (approachRoutes === null) return false;
   const candidate: GateCandidate = {
     gateZM: request.gateZM,
     kind: request.kind,
     blockerSpeedMps: request.blockerSpeedMps,
     targetSpeedMps: request.targetSpeedMps,
     attempt,
-    rowOffsetsM,
+    approachRoutes,
+    approachLaneByEncounter: new Map(
+      approachRoutes.map((route) => [route.encounterId, route.targetLane]),
+    ),
+    maneuverPlan,
   };
   const expected = certifyGate(
     world.seed,
@@ -1606,7 +2042,9 @@ export function verifyJumpCertificate(
     candidate.blockerSpeedMps,
     candidate.targetSpeedMps,
     candidate.attempt,
-    candidate.rowOffsetsM,
+    request.rowOffsetsM,
+    request.maneuverPlan,
+    request.approachRoutes,
   );
   if (
     expected === null ||
@@ -1617,6 +2055,8 @@ export function verifyJumpCertificate(
   }
 
   let actualMinimumClearanceM = Number.POSITIVE_INFINITY;
+  const initialTargetLane =
+    certificate.maneuverPlan[0]?.targetLane ?? certificate.targetLane;
   for (
     let inputTick = certificate.safeTakeoffTickMin;
     inputTick <= certificate.safeTakeoffTickMax;
@@ -1625,7 +2065,7 @@ export function verifyJumpCertificate(
     const replay = simulateGateWitness(
       world,
       candidate,
-      certificate.targetLane,
+      initialTargetLane,
       inputTick - tick,
       false,
     );
@@ -1641,7 +2081,7 @@ export function verifyJumpCertificate(
   const selectedReplay = simulateGateWitness(
     world,
     candidate,
-    certificate.targetLane,
+    initialTargetLane,
     midpoint - tick,
     true,
   );
@@ -1658,13 +2098,16 @@ export class AutorooSimulation {
   readonly seed: number;
   private phase: RunPhase = 'ready';
   private readonly world: MutableWorldState;
-  private encounterCursorM = 130;
+  private encounterCursorM = 100;
   private encounterIndex = 0;
   private lastEscapeLane: LaneIndex = 1;
+  private escapeDirection: -1 | 1 = 1;
   private gateIndex = 0;
   private pendingGateZM: number;
   private lastGateZM = 0;
   private pendingGateAttempted = false;
+  private gateDraftStage = 0;
+  private forceCurrentEscapeNextEncounter = false;
   private activeCertificate: ChallengeCertificate | null = null;
   private readonly groundRoutes: GroundRoute[] = [];
   private readonly events: GameEvent[] = [];
@@ -1776,15 +2219,18 @@ export class AutorooSimulation {
     this.player = makePlayer();
     this.traffic.length = 0;
     this.bonusScore = 0;
-    this.encounterCursorM = 130;
+    this.encounterCursorM = 100;
     this.encounterIndex = 0;
     this.lastEscapeLane = 1;
+    this.escapeDirection = 1;
     this.gateIndex = 0;
     this.lastGateZM = 0;
     this.pendingGateZM =
       nudgeGateToSteadyRoad(this.seed, firstGateDistance(this.seed)) ??
       Number.POSITIVE_INFINITY;
     this.pendingGateAttempted = false;
+    this.gateDraftStage = 0;
+    this.forceCurrentEscapeNextEncounter = false;
     this.activeCertificate = null;
     this.groundRoutes.length = 0;
     this.slowTimeS = 0;
@@ -1915,22 +2361,33 @@ export class AutorooSimulation {
       if (
         vehicle.role !== 'rear-pressure' &&
         !vehicle.locked &&
-        !this.activeCertificate &&
         vehicle.absoluteZM < this.player.absoluteZM - passedExtentM
       ) {
         this.traffic.splice(index, 1);
       }
     }
-    while (
-      this.groundRoutes.length > 0 &&
-      this.groundRoutes[0].zM < this.player.absoluteZM - 100
-    ) {
-      this.groundRoutes.shift();
+    for (let index = this.groundRoutes.length - 1; index >= 0; index -= 1) {
+      const certificateId = this.groundRoutes[index].certificate.id;
+      let hasLiveBlocker = false;
+      for (const vehicle of this.traffic) {
+        if (
+          vehicle.role === 'ordinary' &&
+          vehicle.certificateId === certificateId
+        ) {
+          hasLiveBlocker = true;
+          break;
+        }
+      }
+      if (!hasLiveBlocker) {
+        this.groundRoutes.splice(index, 1);
+      }
     }
   }
 
   private advanceGateLifecycle(): void {
     if (!this.pendingGateAttempted) return;
+    const completedCertificate = this.activeCertificate;
+    let trafficResumeM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
     if (this.activeCertificate) {
       let blockerCount = 0;
       let passedAll = true;
@@ -1952,26 +2409,31 @@ export class AutorooSimulation {
         }
       }
       passedAll &&= blockerCount > 0;
-      const landedBeyondReservation =
+      const reachedCertifiedLanding =
+        passedAll &&
         !this.player.airborne &&
-        this.player.absoluteZM >= landingReservationEndM;
-      if (!passedAll || !landedBeyondReservation) return;
+        this.player.absoluteZM > landingReservationEndM;
+      if (!reachedCertifiedLanding) return;
+      // Resume on the exact terminal condition proved by the certificate:
+      // every blocker and its landing buffer are behind a grounded player.
+      trafficResumeM = Math.max(trafficResumeM, landingReservationEndM + 4);
     } else if (
       this.player.absoluteZM <=
       this.pendingGateZM + GATE_LANDING_CLEAR_M
     ) {
       return;
     }
-    for (const vehicle of this.traffic) {
-      if (vehicle.certificateId === this.activeCertificate?.id)
-        vehicle.locked = false;
+    if (completedCertificate) {
+      for (let index = this.traffic.length - 1; index >= 0; index -= 1) {
+        if (this.traffic[index].certificateId === completedCertificate.id)
+          this.traffic.splice(index, 1);
+      }
     }
     this.activeCertificate = null;
     this.lastGateZM = this.pendingGateZM;
-    this.encounterCursorM = Math.max(
-      this.encounterCursorM,
-      this.player.absoluteZM + 80,
-    );
+    // Never rewind the stream into view. Tail rows were generated before the
+    // gate locked; any later extension must also start behind the fog boundary.
+    this.encounterCursorM = Math.max(this.encounterCursorM, trafficResumeM);
     this.scheduleNextGate();
   }
 
@@ -1991,6 +2453,7 @@ export class AutorooSimulation {
       if (placedM === null || placedM < previousPlacedM + 500) continue;
       this.pendingGateZM = placedM;
       this.pendingGateAttempted = false;
+      this.gateDraftStage = 0;
       return;
     }
     // A bounded placement failure degrades to clear road without blocking play.
@@ -1998,70 +2461,140 @@ export class AutorooSimulation {
     this.pendingGateAttempted = true;
   }
 
-  private fillAhead(): void {
-    if (this.activeCertificate) return;
-    while (this.encounterCursorM < this.player.absoluteZM + FRONT_DRAW_M) {
-      if (
-        this.encounterCursorM >= this.pendingGateZM - GATE_APPROACH_CLEAR_M &&
-        this.encounterCursorM < this.pendingGateZM + GATE_FORWARD_STEADY_M
-      ) {
-        this.encounterCursorM = this.pendingGateZM + GATE_FORWARD_STEADY_M;
-        continue;
+  private furthestLiveOrdinaryZM(): number {
+    let furthestM = Number.NEGATIVE_INFINITY;
+    for (const vehicle of this.traffic) {
+      if (vehicle.role === 'ordinary') {
+        furthestM = Math.max(furthestM, vehicle.absoluteZM);
       }
-      const roadModule = roadModuleForDistance(
-        this.seed,
-        this.encounterCursorM,
-      );
-      if (!roadModule.trafficAllowed) {
-        this.encounterCursorM = roadModule.endM + 10;
-        continue;
-      }
-      if (
-        !isSteadyRoadRange(
-          this.seed,
-          this.encounterCursorM,
-          this.encounterCursorM + ORDINARY_FORWARD_STEADY_M,
-        )
-      ) {
-        const taperStartM = nextTaperStartM(this.seed, this.encounterCursorM);
-        if (Number.isFinite(taperStartM)) {
-          this.encounterCursorM =
-            roadModuleForDistance(this.seed, taperStartM).endM + 10;
-          continue;
-        }
-      }
-      this.spawnOrdinaryEncounter(this.encounterCursorM);
-      const difficulty = difficultyAt(this.encounterCursorM);
-      this.encounterCursorM += ordinaryGapM(
+    }
+    return furthestM;
+  }
+
+  private preserveLiveEncounterOrder(): void {
+    const furthestM = this.furthestLiveOrdinaryZM();
+    if (!Number.isFinite(furthestM)) return;
+    const minimumNextM =
+      furthestM +
+      ordinaryGapM(
         this.seed,
         this.encounterIndex,
-        difficulty,
+        difficultyAt(Math.max(this.player.maxForwardM, furthestM)),
       );
+    this.encounterCursorM = Math.max(this.encounterCursorM, minimumNextM);
+  }
+
+  private fillAhead(): void {
+    if (this.activeCertificate) {
+      // Keep extending the jam while its certified mixed core is in progress.
+      // Each continuation row is proved from the exact live gate state and is
+      // born beyond the render boundary, so the fixed pools recycle naturally
+      // instead of ending every burst with a generation hole.
+      this.preserveLiveEncounterOrder();
+      this.encounterCursorM = Math.max(
+        this.encounterCursorM,
+        this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M,
+      );
+      this.fillOrdinaryUntil(
+        this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M + 1,
+        this.activeCertificate,
+      );
+      return;
+    }
+    // Traffic keeps advancing while a gate is active. Historical start
+    // coordinates therefore cannot guarantee that a later draft remains in
+    // front of every live row; align to the moving frontier before appending.
+    this.preserveLiveEncounterOrder();
+    const generationEndM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
+    let remainingFailedDrafts = 4;
+    while (this.encounterCursorM < generationEndM) {
+      if (
+        this.encounterCursorM >= this.pendingGateZM - GATE_APPROACH_CLEAR_M &&
+        this.encounterCursorM < this.pendingGateZM + POST_GATE_TRAFFIC_START_M
+      ) {
+        this.encounterCursorM = this.pendingGateZM + POST_GATE_TRAFFIC_START_M;
+        continue;
+      }
+      const spawned = this.spawnOrdinaryEncounter(this.encounterCursorM);
+      const difficulty = difficultyAt(this.encounterCursorM);
+      const fullGapM = ordinaryGapM(this.seed, this.encounterIndex, difficulty);
       this.encounterIndex += 1;
+      this.encounterCursorM += spawned ? fullGapM : Math.min(4, fullGapM);
+      if (!spawned) {
+        remainingFailedDrafts -= 1;
+        if (remainingFailedDrafts === 0) break;
+      }
     }
   }
 
-  private spawnOrdinaryEncounter(zM: number): void {
-    // A row is only revealed if its complete 20-second certified trajectory
-    // remains on steady road. A future taper is deferred by emitting clear road,
-    // never by deleting a vehicle the player has already seen.
-    if (!isSteadyRoadRange(this.seed, zM, zM + ORDINARY_FORWARD_STEADY_M)) {
-      return;
+  private fillOrdinaryUntil(
+    generationEndM: number,
+    activeCertificate: ChallengeCertificate,
+  ): void {
+    let remainingFailedDrafts = 4;
+    while (this.encounterCursorM < generationEndM) {
+      const spawned = this.spawnOrdinaryEncounter(
+        this.encounterCursorM,
+        activeCertificate,
+      );
+      const difficulty = difficultyAt(this.encounterCursorM);
+      const fullGapM = ordinaryGapM(this.seed, this.encounterIndex, difficulty);
+      this.encounterIndex += 1;
+      this.encounterCursorM += spawned ? fullGapM : Math.min(4, fullGapM);
+      if (!spawned) {
+        remainingFailedDrafts -= 1;
+        if (remainingFailedDrafts === 0) break;
+      }
     }
-    const mask = laneMaskAt(this.seed, zM);
+  }
+
+  private spawnOrdinaryEncounter(
+    zM: number,
+    activeCertificate: ChallengeCertificate | null = null,
+  ): boolean {
+    // Rows continue through topology changes, but only on the permanent lanes
+    // beside a curved taper. A blocker is retired only when its own lane later
+    // closes, so transitions no longer create 100+ metre traffic deserts.
+    const mask = trafficLaneMaskAt(this.seed, zM);
     const lanes = activeLanes(mask);
     const difficulty = difficultyAt(zM);
-    const preferredEscapeLane = chooseEscapeLane(
-      this.seed,
-      this.encounterIndex,
-      mask,
-      this.lastEscapeLane,
-      difficulty,
+    const adjacentEscapeLanes = lanes.filter(
+      (lane) => Math.abs(lane - this.lastEscapeLane) <= 1,
     );
+    const alternateEscapeLanes = adjacentEscapeLanes.filter(
+      (lane) => lane !== this.lastEscapeLane,
+    );
+    const forceLaneChange =
+      !this.forceCurrentEscapeNextEncounter &&
+      difficulty >= 0.55 &&
+      alternateEscapeLanes.length > 0;
+    let preferredEscapeLane: LaneIndex;
+    if (this.forceCurrentEscapeNextEncounter) {
+      preferredEscapeLane = nearestActiveLane(mask, this.lastEscapeLane);
+    } else if (forceLaneChange) {
+      preferredEscapeLane = (this.lastEscapeLane +
+        this.escapeDirection) as LaneIndex;
+      if (!alternateEscapeLanes.includes(preferredEscapeLane)) {
+        this.escapeDirection = this.escapeDirection === 1 ? -1 : 1;
+        preferredEscapeLane = (this.lastEscapeLane +
+          this.escapeDirection) as LaneIndex;
+      }
+      if (!alternateEscapeLanes.includes(preferredEscapeLane)) {
+        preferredEscapeLane = alternateEscapeLanes[0];
+      }
+    } else {
+      preferredEscapeLane = chooseEscapeLane(
+        this.seed,
+        this.encounterIndex,
+        mask,
+        this.lastEscapeLane,
+        difficulty,
+      );
+    }
     const encounterId = `ordinary-${this.encounterIndex}`;
     const certificateId = `ground-${this.encounterIndex}`;
-    const taperStartM = nextTaperStartM(this.seed, zM);
-    const escapeOptions = lanes
+    const escapeOptions = adjacentEscapeLanes
+      .filter((lane) => !forceLaneChange || lane !== this.lastEscapeLane)
       .filter((lane) => Math.abs(lane - this.lastEscapeLane) <= 1)
       .sort((first, second) => {
         if (first === preferredEscapeLane) return -1;
@@ -2071,6 +2604,13 @@ export class AutorooSimulation {
           hashParts(this.seed, this.encounterIndex, second, 367)
         );
       });
+    if (this.forceCurrentEscapeNextEncounter) {
+      const forcedIndex = escapeOptions.indexOf(preferredEscapeLane);
+      if (forcedIndex > 0) {
+        escapeOptions.splice(forcedIndex, 1);
+        escapeOptions.unshift(preferredEscapeLane);
+      }
+    }
 
     for (const escapeLane of escapeOptions) {
       const candidates = lanes
@@ -2080,7 +2620,7 @@ export class AutorooSimulation {
             hashParts(this.seed, this.encounterIndex, first, 311) -
             hashParts(this.seed, this.encounterIndex, second, 311),
         );
-      const blockingPressure = Math.min(1, difficulty * 1.45);
+      const blockingPressure = Math.min(1, 0.12 + difficulty * 1.5);
       const blockedCount = Math.min(
         candidates.length,
         1 +
@@ -2092,8 +2632,29 @@ export class AutorooSimulation {
       let currentBuses = this.traffic.filter(
         (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind === 'bus',
       ).length;
+      const activeGateBlockers = this.activeCertificate?.blockerIds.length ?? 0;
+      const pendingGateReserve =
+        !this.activeCertificate &&
+        !this.pendingGateAttempted &&
+        Number.isFinite(this.pendingGateZM)
+          ? MAX_PENDING_GATE_BLOCKERS
+          : 0;
+      const gateBlockerReserve = activeGateBlockers + pendingGateReserve;
+      const gateNeedsPool = gateBlockerReserve > 0;
+      const frontCarLimit = pendingGateReserve
+        ? RENDER_POOL_LIMITS.frontCars - pendingGateReserve
+        : RENDER_POOL_LIMITS.frontCars;
+      const ordinaryBlockerLimit = gateNeedsPool
+        ? RENDER_POOL_LIMITS.frontCars +
+          RENDER_POOL_LIMITS.buses -
+          gateBlockerReserve
+        : RENDER_POOL_LIMITS.frontCars + RENDER_POOL_LIMITS.buses;
+      let currentOrdinaryBlockers = this.traffic.filter(
+        (vehicle) => vehicle.role === 'ordinary',
+      ).length;
       const drafted: TrafficVehicle[] = [];
       for (let index = 0; index < blockedCount; index += 1) {
+        if (currentOrdinaryBlockers >= ordinaryBlockerLimit) break;
         const busChance = 0.12 + difficulty * 0.3;
         const preferredKind: VehicleKind =
           hashUnit(this.seed, this.encounterIndex, index, 347) < busChance
@@ -2103,23 +2664,23 @@ export class AutorooSimulation {
               : 'suv';
         let kind = preferredKind;
         if (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) {
+          if (currentCars >= frontCarLimit) continue;
           kind =
             hashParts(this.seed, this.encounterIndex, index, 353) % 2 === 0
               ? 'sedan'
               : 'suv';
-        } else if (
-          kind !== 'bus' &&
-          currentCars >= RENDER_POOL_LIMITS.frontCars
-        ) {
+        } else if (kind !== 'bus' && currentCars >= frontCarLimit) {
           kind = 'bus';
         }
         if (
           (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) ||
-          (kind !== 'bus' && currentCars >= RENDER_POOL_LIMITS.frontCars)
+          (kind !== 'bus' && currentCars >= frontCarLimit)
         )
           continue;
         if (kind === 'bus') currentBuses += 1;
         else currentCars += 1;
+        currentOrdinaryBlockers += 1;
+        const laneClosureM = nextLaneClosureM(this.seed, zM, candidates[index]);
         drafted.push(
           createTrafficVehicle(
             `${encounterId}-${candidates[index]}`,
@@ -2128,10 +2689,10 @@ export class AutorooSimulation {
             'ordinary',
             candidates[index],
             zM,
-            8,
+            activeCertificate ? 6 : 8,
             certificateId,
-            Number.isFinite(taperStartM)
-              ? taperStartM -
+            Number.isFinite(laneClosureM)
+              ? laneClosureM -
                   vehicleDimensions(kind).lengthM / 2 -
                   LONGITUDINAL_MARGIN_M
               : null,
@@ -2145,11 +2706,17 @@ export class AutorooSimulation {
         routeTargets.set(route.encounterId, route.certificate.targetLane);
       }
       routeTargets.set(encounterId, escapeLane);
-      const replay = simulateGroundWitness(this.world, drafted, routeTargets);
+      const replay = simulateGroundWitness(
+        this.world,
+        drafted,
+        routeTargets,
+        activeCertificate,
+      );
       if (!replay.success) continue;
 
       const blockerTrajectories = drafted.map((vehicle) => ({
         id: vehicle.id,
+        encounterId: vehicle.encounterId,
         lane: vehicle.lane,
         startTick: this.tickNumber,
         startZM: vehicle.absoluteZM,
@@ -2165,8 +2732,10 @@ export class AutorooSimulation {
           exactNumber(zM),
           mask,
           escapeLane,
+          activeCertificate ? canonicalCertificate(activeCertificate) : null,
           blockerTrajectories.map((trajectory) => [
             trajectory.id,
+            trajectory.encounterId,
             trajectory.lane,
             exactNumber(trajectory.startZM),
             exactNumber(trajectory.speedMps),
@@ -2187,6 +2756,18 @@ export class AutorooSimulation {
         dependencyHash,
         targetLane: escapeLane,
         selectedVehicle: drafted[0].kind,
+        approachRoutes: [],
+        maneuverPlan: [
+          {
+            offsetM: 0,
+            blockedLaneMask: drafted.reduce(
+              (maskValue, vehicle) => maskValue | (1 << vehicle.lane),
+              0,
+            ),
+            action: 'dodge',
+            targetLane: escapeLane,
+          },
+        ],
         blockerIds: drafted.map((vehicle) => vehicle.id),
         blockerTrajectories,
         safeTakeoffTickMin: 0,
@@ -2202,69 +2783,93 @@ export class AutorooSimulation {
       });
       this.traffic.push(...drafted);
       this.groundRoutes.push({ zM, encounterId, certificate });
+      if (escapeLane !== this.lastEscapeLane) {
+        this.escapeDirection = escapeLane > this.lastEscapeLane ? 1 : -1;
+      }
       this.lastEscapeLane = escapeLane;
-      return;
+      this.forceCurrentEscapeNextEncounter = false;
+      return true;
     }
-    // A failed draft becomes clear road; generation always advances its cursor.
+    // The caller retries nearby with a different deterministic draft instead
+    // of turning one rejected proof into a full ordinary encounter gap.
+    return false;
   }
 
   private tryRevealGate(): void {
+    const gateDistanceM = this.pendingGateZM - this.player.absoluteZM;
+    const currentDraftThresholdM =
+      GATE_REVEAL_M - this.gateDraftStage * GATE_RETRY_STEP_M;
     if (
       this.pendingGateAttempted ||
-      this.pendingGateZM - this.player.absoluteZM > GATE_REVEAL_M ||
-      this.pendingGateZM <= this.player.absoluteZM
+      gateDistanceM > currentDraftThresholdM ||
+      gateDistanceM <= 0
     ) {
       return;
     }
-    this.pendingGateAttempted = true;
+    const draftStage = this.gateDraftStage;
     const gateDifficulty = difficultyAt(this.player.maxForwardM);
     const preferSuv =
       gateDifficulty > 0.45 &&
       hashParts(this.seed, this.gateIndex, 401) % 3 === 0;
-    const requestedRows =
-      this.gateIndex === 0
-        ? 2
-        : gateDifficulty < 0.99 ||
-            (gateDifficulty < 0.999 &&
-              hashParts(this.seed, this.gateIndex, 409) % 4 === 0)
-          ? 3
-          : 4;
-    const gateLaneCount = activeLanes(
-      laneMaskAt(this.seed, this.pendingGateZM),
-    ).length;
+    const requestedRows = 20;
+    const gateMask = laneMaskAt(this.seed, this.pendingGateZM);
+    const startingLane = nearestActiveLane(gateMask, this.player.lane);
+    const liveOrdinaryEncounterIds = new Set(
+      this.traffic
+        .filter((vehicle) => vehicle.role === 'ordinary')
+        .map((vehicle) => vehicle.encounterId),
+    );
+    const approachRoutes = this.groundRoutes
+      .filter(
+        (route) =>
+          route.certificate.revealTick < this.tickNumber &&
+          liveOrdinaryEncounterIds.has(route.encounterId) &&
+          route.zM < this.pendingGateZM,
+      )
+      .map((route) => ({
+        encounterId: route.encounterId,
+        targetLane: route.certificate.targetLane,
+      }));
     const currentFrontCars = this.traffic.filter(
       (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
     ).length;
-    const availableRows = Math.floor(
-      (RENDER_POOL_LIMITS.frontCars - currentFrontCars) / gateLaneCount,
-    );
-    if (availableRows < 1) {
-      this.replacePendingGateWithOrdinary();
-      return;
-    }
-    const desiredRows = Math.min(requestedRows, availableRows);
-    // The compact jump still clears ordinary buses at full speed, but their
-    // long collider cannot offer the mandatory 0.25 s input window. Certified
-    // all-lane gauntlets therefore use shorter cars and SUVs only. The final
-    // attempt deliberately degrades to one row instead of stalling generation.
+    // Every attempt is a sustained mixed chain. A failed proof degrades to a
+    // dense ordinary row; it never silently substitutes the old one-row gate.
     const attempts: readonly [VehicleKind, number, number, number, number][] =
       preferSuv
         ? [
-            ['suv', 3, 28, desiredRows, 1],
-            ['sedan', 4, 28, desiredRows, 1],
-            ['suv', 2.5, 28, Math.max(1, desiredRows - 1), 1.015],
-            ['sedan', 3.5, 27, 1, 1],
+            ['suv', 0, 28, requestedRows, 8],
+            ['sedan', 0, 28, requestedRows, 8],
+            ['suv', 0, 27, requestedRows, 8],
+            ['sedan', 0, 27, requestedRows, 8],
           ]
         : [
-            ['sedan', 4, 28, desiredRows, 1],
-            ['suv', 3, 28, desiredRows, 1],
-            ['sedan', 3.5, 27, Math.max(1, desiredRows - 1), 1.015],
-            ['suv', 2.5, 28, 1, 1],
+            ['sedan', 0, 28, requestedRows, 8],
+            ['suv', 0, 28, requestedRows, 8],
+            ['sedan', 0, 27, requestedRows, 8],
+            ['suv', 0, 27, requestedRows, 8],
           ];
     let certificate: ChallengeCertificate | null = null;
     for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-      const [kind, blockerSpeed, targetSpeed, rowCount, spacingScale] =
+      const candidateAttempt = draftStage * attempts.length + attempt;
+      const [kind, blockerSpeed, targetSpeed, rowCount, jumpStride] =
         attempts[attempt];
+      const maneuverPlan = mixedPressureManeuvers(
+        this.seed,
+        this.gateIndex * GATE_DRAFT_STAGES * attempts.length + candidateAttempt,
+        gateMask,
+        startingLane,
+        rowCount,
+        blockerSpeed,
+        jumpStride,
+      );
+      const blockerCount = maneuverPlan.reduce(
+        (total, maneuver) => total + countLanes(maneuver.blockedLaneMask),
+        0,
+      );
+      if (currentFrontCars + blockerCount > RENDER_POOL_LIMITS.frontCars) {
+        continue;
+      }
       certificate = certifyGate(
         this.seed,
         this.tickNumber,
@@ -2279,22 +2884,40 @@ export class AutorooSimulation {
         kind,
         blockerSpeed,
         targetSpeed,
-        attempt,
-        jumpChainOffsetsM(rowCount, blockerSpeed, spacingScale),
+        candidateAttempt,
+        undefined,
+        maneuverPlan,
+        approachRoutes,
       );
       if (certificate) break;
     }
     if (!certificate) {
-      this.replacePendingGateWithOrdinary();
+      this.gateDraftStage += 1;
+      if (this.gateDraftStage >= GATE_DRAFT_STAGES) {
+        this.pendingGateAttempted = true;
+        this.replacePendingGateWithOrdinary();
+      }
       return;
     }
 
+    this.pendingGateAttempted = true;
     this.activeCertificate = certificate;
+    this.lastEscapeLane = certificate.targetLane;
+    const priorManeuver = certificate.maneuverPlan.at(-2);
+    if (priorManeuver && priorManeuver.targetLane !== certificate.targetLane) {
+      this.escapeDirection =
+        priorManeuver.targetLane < certificate.targetLane ? 1 : -1;
+    }
+    this.forceCurrentEscapeNextEncounter = true;
+    this.encounterCursorM = Math.max(
+      this.encounterCursorM,
+      this.pendingGateZM + POST_GATE_TRAFFIC_START_M,
+    );
     for (const trajectory of certificate.blockerTrajectories) {
       this.traffic.push(
         createTrafficVehicle(
           trajectory.id,
-          certificate.id,
+          trajectory.encounterId,
           certificate.selectedVehicle,
           'gate',
           trajectory.lane,
@@ -2308,25 +2931,24 @@ export class AutorooSimulation {
   }
 
   private replacePendingGateWithOrdinary(): void {
-    // A rejected jump draft becomes a certified ordinary row, then normal
-    // dense generation resumes immediately beyond it. This preserves the
-    // fail-open invariant without leaving the whole reserved landing corridor
-    // visibly empty.
+    // A rejected gate becomes a normal certified row at the same still-hidden
+    // coordinate. No speculative traffic needs to be created or withdrawn.
     const fallbackGateZM = this.pendingGateZM;
-    const fallbackEncounterIndex = this.encounterIndex;
-    this.spawnOrdinaryEncounter(fallbackGateZM);
-    this.encounterIndex += 1;
+    this.encounterCursorM = fallbackGateZM;
+    this.forceCurrentEscapeNextEncounter = true;
+    if (fallbackGateZM - this.player.absoluteZM > TRAFFIC_RENDER_AHEAD_M) {
+      const fallbackIndex = this.encounterIndex;
+      const spawned = this.spawnOrdinaryEncounter(fallbackGateZM);
+      this.encounterIndex += 1;
+      this.encounterCursorM =
+        fallbackGateZM +
+        (spawned
+          ? ordinaryGapM(this.seed, fallbackIndex, difficultyAt(fallbackGateZM))
+          : 4);
+    }
     this.lastGateZM = fallbackGateZM;
     this.scheduleNextGate();
-    this.encounterCursorM = Math.min(
-      this.encounterCursorM,
-      fallbackGateZM +
-        ordinaryGapM(
-          this.seed,
-          fallbackEncounterIndex,
-          difficultyAt(fallbackGateZM),
-        ),
-    );
+    this.forceCurrentEscapeNextEncounter = true;
     this.fillAhead();
   }
 
@@ -2419,8 +3041,10 @@ export class AutorooSimulation {
     }>,
   ): void {
     if (patch.gateIndex !== undefined) this.gateIndex = patch.gateIndex;
-    if (patch.pendingGateZM !== undefined)
+    if (patch.pendingGateZM !== undefined) {
       this.pendingGateZM = patch.pendingGateZM;
+      this.gateDraftStage = 0;
+    }
     if (patch.pendingGateAttempted !== undefined) {
       this.pendingGateAttempted = patch.pendingGateAttempted;
     }
@@ -2487,10 +3111,13 @@ export class AutorooSimulation {
         exactNumber(this.encounterCursorM),
         this.encounterIndex,
         this.lastEscapeLane,
+        this.escapeDirection,
         this.gateIndex,
         exactNumber(this.pendingGateZM),
         exactNumber(this.lastGateZM),
         this.pendingGateAttempted,
+        this.gateDraftStage,
+        this.forceCurrentEscapeNextEncounter,
         this.activeCertificate
           ? canonicalCertificate(this.activeCertificate)
           : null,

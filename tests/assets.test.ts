@@ -105,26 +105,30 @@ describe('curated asset supply chain', () => {
     expect(MODEL_CONFIGS.sports).toMatchObject({
       scale: 1.15,
       yaw: 0,
+      groundY: 0.058,
       bodyMaterials: ['White'],
-      color: '#071b3f',
+      color: '#0b3d82',
       headlightMaterials: ['Headlights'],
       taillightMaterials: ['TailLights'],
     });
     expect(MODEL_CONFIGS.sedan).toMatchObject({
       scale: 1.08,
       yaw: 0,
+      groundY: 0.034,
       headlightMaterials: ['Headlights'],
       taillightMaterials: ['TailLights'],
     });
     expect(MODEL_CONFIGS.suv).toMatchObject({
       scale: 1.03,
       yaw: 0,
+      groundY: 0.059,
       headlightMaterials: ['Headlights'],
       taillightMaterials: ['TailLights'],
     });
     expect(MODEL_CONFIGS.bus).toMatchObject({
       scale: 0.24,
       yaw: 0,
+      groundY: 0.03,
       headlightMaterials: ['FF9800'],
       taillightMaterials: ['F44336'],
     });

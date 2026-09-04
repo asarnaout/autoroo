@@ -16,6 +16,11 @@ export const RENDER_POOL_LIMITS = Object.freeze({
   roadTiles: 16,
 });
 
+// Forward traffic is born beyond the render/fog boundary, then moves naturally
+// into view. Keep the simulation lead larger than the Babylon visibility cap.
+export const TRAFFIC_RENDER_AHEAD_M = 285;
+export const TRAFFIC_PREGEN_AHEAD_M = 305;
+
 export const MAX_SPEED_MPS = 36;
 export const ACCELERATION_MPS2 = 8;
 export const BRAKING_MPS2 = 14;
@@ -40,14 +45,14 @@ export const LONGITUDINAL_MARGIN_M = 0.25;
 export const VERTICAL_CLEARANCE_M = 0.15;
 export const TIMING_MARGIN_TICKS = 2;
 export const MIN_SPACE_WINDOW_S = 0.25;
-export const GATE_APPROACH_CLEAR_M = 240;
-export const GATE_LANDING_CLEAR_M = 70;
+// Pressure sequences reserve a quiet approach/landing corridor. Their exact
+// reveal-state replay preserves reaction, acceleration, and input windows.
+export const GATE_APPROACH_CLEAR_M = 140;
+export const GATE_LANDING_CLEAR_M = 8;
 export const GATE_WITNESS_LIMIT_S = 20;
-// This covers every built-in sedan/SUV gate trajectory, landing zone, and
-// combined collider without coupling road topology to the selected attempt.
-// Multi-row hop gauntlets can occupy a little over 80 m before their moving
-// blockers and landing corridor are accounted for.
-export const GATE_FORWARD_STEADY_M = 245;
+// Twenty alternating jump/landing beats span roughly 291 m. This bound also
+// includes the final blocker footprint and the compact landing corridor.
+export const GATE_FORWARD_STEADY_M = 310;
 
 export const VEHICLE_DIMENSIONS: Readonly<
   Record<VehicleKind, { lengthM: number; widthM: number; heightM: number }>

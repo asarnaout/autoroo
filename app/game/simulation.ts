@@ -20,6 +20,7 @@ import {
   MODULE_LENGTH_M,
   PLAYER_LENGTH_M,
   PLAYER_WIDTH_M,
+  RENDER_POOL_LIMITS,
   TIMING_MARGIN_TICKS,
   VEHICLE_DIMENSIONS,
   VERTICAL_CLEARANCE_M,
@@ -56,9 +57,6 @@ import {
 } from './generator';
 import { hashParts, hashUnit, stableHash } from './random';
 
-const MAX_FRONT_CARS = 40;
-const MAX_FRONT_BUSES = 16;
-const MAX_REAR_CARS = 4;
 const FRONT_DRAW_M = 260;
 const GATE_REVEAL_M = 205;
 // Vehicles retire safely before the next taper and the production witness
@@ -104,6 +102,7 @@ interface GateCandidate {
   readonly blockerSpeedMps: number;
   readonly targetSpeedMps: number;
   readonly attempt: number;
+  readonly rowOffsetsM: readonly number[];
 }
 
 interface WitnessResult {
@@ -114,6 +113,11 @@ interface WitnessResult {
   readonly clearedAtTick: number;
 }
 
+interface PreparedGateReplays {
+  readonly worlds: ReadonlyMap<number, MutableWorldState>;
+  readonly prefixWitness: readonly WitnessTracePoint[];
+}
+
 const WORLD_JUMPED = 1 << 0;
 const WORLD_CRASHED = 1 << 1;
 const WORLD_REAR_SPAWNED = 1 << 2;
@@ -121,6 +125,7 @@ const WORLD_REAR_RETIRED = 1 << 3;
 const MAX_PENDING_EVENTS = 64;
 const MAX_WITNESS_TICKS = Math.round(GATE_WITNESS_LIMIT_S / FIXED_DT);
 const TRANSITION_REAR_GRACE_S = 2;
+const MAX_GATE_ROWS = 4;
 
 function quantize(value: number): number {
   return Math.round(value * 1000);
@@ -133,13 +138,53 @@ function vehicleDimensions(kind: VehicleKind) {
 function gateForwardReservationM(
   kind: VehicleKind,
   blockerSpeedMps: number,
+  rowOffsetsM: readonly number[] = [0],
 ): number {
+  const lastRowOffsetM = rowOffsetsM[rowOffsetsM.length - 1] ?? 0;
   return (
+    lastRowOffsetM +
     Math.max(0, blockerSpeedMps) * GATE_WITNESS_LIMIT_S +
     GATE_LANDING_CLEAR_M +
     PLAYER_LENGTH_M / 2 +
     vehicleDimensions(kind).lengthM / 2 +
     LONGITUDINAL_MARGIN_M
+  );
+}
+
+function normalizeGateRowOffsets(
+  rowOffsetsM: readonly number[] | undefined,
+): readonly number[] | null {
+  const offsets = rowOffsetsM ?? [0];
+  if (offsets.length === 0 || offsets.length > MAX_GATE_ROWS) return null;
+  const normalized: number[] = [];
+  for (let index = 0; index < offsets.length; index += 1) {
+    const offsetM = offsets[index];
+    if (
+      !Number.isFinite(offsetM) ||
+      offsetM < 0 ||
+      (index === 0 && Math.abs(offsetM) > 1e-9) ||
+      (index > 0 && offsetM - normalized[index - 1] < 12)
+    ) {
+      return null;
+    }
+    normalized.push(offsetM);
+  }
+  if ((normalized.at(-1) ?? 0) > 90) return null;
+  return Object.freeze(normalized);
+}
+
+/** Tight centres for blockers met at the same phase of consecutive auto-hops. */
+export function jumpChainOffsetsM(
+  rowCount: number,
+  blockerSpeedMps: number,
+  spacingScale = 1,
+): readonly number[] {
+  const count = Math.max(1, Math.min(MAX_GATE_ROWS, Math.floor(rowCount)));
+  const relativeSpeedMps = Math.max(0, MAX_SPEED_MPS - blockerSpeedMps);
+  const hopCycleS = Math.ceil(JUMP_FLIGHT_SECONDS / FIXED_DT) * FIXED_DT;
+  const spacingM = relativeSpeedMps * hopCycleS * spacingScale;
+  return Object.freeze(
+    Array.from({ length: count }, (_, index) => index * spacingM),
   );
 }
 
@@ -563,7 +608,11 @@ function stateDependencyHash(
     Math.max(
       0,
       candidate.gateZM +
-        gateForwardReservationM(candidate.kind, candidate.blockerSpeedMps),
+        gateForwardReservationM(
+          candidate.kind,
+          candidate.blockerSpeedMps,
+          candidate.rowOffsetsM,
+        ),
     ) / MODULE_LENGTH_M,
   );
   const road: unknown[] = [];
@@ -588,6 +637,7 @@ function stateDependencyHash(
       candidate.kind,
       exactNumber(candidate.blockerSpeedMps),
       exactNumber(candidate.targetSpeedMps),
+      candidate.rowOffsetsM.map(exactNumber),
       road,
       trajectories.map((trajectory) => [
         trajectory.id,
@@ -720,7 +770,7 @@ function enforceActiveLaneTarget(player: PlayerState, mask: number): void {
 function spawnRearPackInto(world: MutableWorldState): void {
   const lanes = activeLanes(laneMaskAt(world.seed, world.player.absoluteZM));
   const encounterId = `rear-${world.tickNumber}`;
-  for (const lane of lanes.slice(0, MAX_REAR_CARS)) {
+  for (const lane of lanes.slice(0, RENDER_POOL_LIMITS.rearCars)) {
     world.traffic.push(
       createTrafficVehicle(
         `${encounterId}-${lane}`,
@@ -835,6 +885,7 @@ function witnessInput(
   targetLane: LaneIndex,
   localTick: number,
   jumpTick: number | null,
+  holdJump = false,
 ): InputFrame {
   let laneDelta: -1 | 0 | 1 = 0;
   if (
@@ -852,7 +903,9 @@ function witnessInput(
     accelerate: localTick >= 45,
     brake: false,
     laneDelta,
-    jumpPressed: jumpTick === localTick,
+    jumpPressed:
+      jumpTick !== null &&
+      (jumpTick === localTick || (holdJump && localTick >= jumpTick)),
   };
 }
 
@@ -897,13 +950,17 @@ function certifyGate(
   blockerSpeedMps: number,
   targetSpeedMps: number,
   attempt: number,
+  rowOffsetsM: readonly number[] | undefined,
 ): ChallengeCertificate | null {
+  const normalizedRowOffsetsM = normalizeGateRowOffsets(rowOffsetsM);
+  if (normalizedRowOffsetsM === null) return null;
   const candidate: GateCandidate = {
     gateZM,
     kind,
     blockerSpeedMps,
     targetSpeedMps,
     attempt,
+    rowOffsetsM: normalizedRowOffsetsM,
   };
   const revealWorld: MutableWorldState = {
     seed,
@@ -918,7 +975,12 @@ function certifyGate(
       rearWarning,
     },
   };
-  const forwardReservationM = gateForwardReservationM(kind, blockerSpeedMps);
+  const forwardReservationM = gateForwardReservationM(
+    kind,
+    blockerSpeedMps,
+    candidate.rowOffsetsM,
+  );
+  if (forwardReservationM > GATE_FORWARD_STEADY_M) return null;
   if (
     !Number.isFinite(gateZM) ||
     !Number.isFinite(blockerSpeedMps) ||
@@ -951,7 +1013,7 @@ function certifyGate(
     id: blocker.id,
     lane: blocker.lane,
     startTick: tick,
-    startZM: gateZM,
+    startZM: blocker.absoluteZM,
     speedMps: blocker.speedMps,
     retireAtZM: null,
   }));
@@ -976,32 +1038,91 @@ function certifyGate(
       index += 1;
       if (runEnd - runStart < requiredTickSpan) continue;
 
-      const jumpTick = Math.floor((runStart + runEnd) / 2);
-      // The interval is analytic. Boundary and midpoint production replays
-      // bind it to every live ordinary/rear trajectory without O(window) work.
-      const startReplay = simulateGateWitness(
-        revealWorld,
-        candidate,
-        targetLane,
-        runStart,
-        false,
-      );
-      const endReplay = simulateGateWitness(
-        revealWorld,
-        candidate,
-        targetLane,
-        runEnd,
-        false,
-      );
-      const selectedReplay = simulateGateWitness(
+      // Advertise exactly the human-tolerant minimum span. The surrounding
+      // analytic window remains useful for placement, but proving extra input
+      // ticks would add synchronous work to the reveal frame without improving
+      // the contract.
+      const certifiedStart =
+        candidate.rowOffsetsM.length > 1
+          ? Math.floor((runStart + runEnd - requiredTickSpan) / 2)
+          : runStart;
+      const certifiedEnd =
+        candidate.rowOffsetsM.length > 1
+          ? certifiedStart + requiredTickSpan
+          : runEnd;
+      const jumpTick = Math.floor((certifiedStart + certifiedEnd) / 2);
+      // Repeated land/re-takeoff cycles are discrete, so a multi-row chain may
+      // not be monotonic between its analytic endpoints. Replay every advertised
+      // initial press tick before locking the challenge.
+      let certifiedClearanceM = Number.POSITIVE_INFINITY;
+      let allTakeoffTicksPass = true;
+      const replayTicks =
+        candidate.rowOffsetsM.length > 1
+          ? Array.from(
+              { length: certifiedEnd - certifiedStart + 1 },
+              (_, replayIndex) => certifiedStart + replayIndex,
+            )
+          : [certifiedStart, certifiedEnd];
+      const preparedReplays =
+        candidate.rowOffsetsM.length > 1
+          ? prepareGateReplayWorlds(
+              revealWorld,
+              candidate,
+              targetLane,
+              replayTicks,
+              jumpTick,
+            )
+          : null;
+      const blockerIds = new Set(blockers.map((blocker) => blocker.id));
+      let selectedReplay: WitnessResult | null = null;
+      for (const replayTick of replayTicks) {
+        const preparedWorld = preparedReplays?.worlds.get(replayTick);
+        let replay = preparedWorld
+          ? continueGateWitness(
+              preparedWorld,
+              preparedWorld.traffic.filter((vehicle) =>
+                blockerIds.has(vehicle.id),
+              ),
+              candidate,
+              targetLane,
+              replayTick,
+              replayTick,
+              replayTick === jumpTick,
+            )
+          : simulateGateWitness(
+              revealWorld,
+              candidate,
+              targetLane,
+              replayTick,
+              false,
+            );
+        if (replayTick === jumpTick && preparedReplays) {
+          const witness = [...preparedReplays.prefixWitness, ...replay.witness];
+          replay = {
+            ...replay,
+            witness,
+            witnessTraceHash: traceHash(witness),
+          };
+          selectedReplay = replay;
+        }
+        if (!replay.success) {
+          allTakeoffTicksPass = false;
+          break;
+        }
+        certifiedClearanceM = Math.min(
+          certifiedClearanceM,
+          replay.verticalClearanceM,
+        );
+      }
+      if (!allTakeoffTicksPass) continue;
+      selectedReplay ??= simulateGateWitness(
         revealWorld,
         candidate,
         targetLane,
         jumpTick,
         true,
       );
-      if (!startReplay.success || !endReplay.success || !selectedReplay.success)
-        continue;
+      if (!selectedReplay.success) continue;
 
       const lockedStateHash = hashLockedWorld(revealWorld);
       const dependencyHash = stateDependencyHash(
@@ -1022,18 +1143,17 @@ function certifyGate(
         selectedVehicle: kind,
         blockerIds: blockers.map((blocker) => blocker.id),
         blockerTrajectories: trajectories,
-        safeTakeoffTickMin: tick + runStart,
-        safeTakeoffTickMax: tick + runEnd,
+        safeTakeoffTickMin: tick + certifiedStart,
+        safeTakeoffTickMax: tick + certifiedEnd,
         minimumSpeedMps: targetMath.minimumSpeedMps,
         targetSpeedMps,
         verticalClearanceM: Math.min(
-          startReplay.verticalClearanceM,
-          endReplay.verticalClearanceM,
+          certifiedClearanceM,
           selectedReplay.verticalClearanceM,
         ),
         longitudinalMarginM: LONGITUDINAL_MARGIN_M,
         timingMarginTicks: TIMING_MARGIN_TICKS,
-        inputWindowS: (runEnd - runStart) * FIXED_DT,
+        inputWindowS: (certifiedEnd - certifiedStart) * FIXED_DT,
         witnessTraceHash: selectedReplay.witnessTraceHash,
         witness: selectedReplay.witness,
       });
@@ -1062,17 +1182,29 @@ function makeGateBlockers(
   candidate: GateCandidate,
   lanes: readonly LaneIndex[],
 ): TrafficVehicle[] {
-  return lanes.map((lane) =>
-    createTrafficVehicle(
-      `gate-${world.tickNumber}-${candidate.attempt}-${lane}`,
-      `gate-${world.tickNumber}-${candidate.attempt}`,
-      candidate.kind,
-      'gate',
-      lane,
-      candidate.gateZM,
-      candidate.blockerSpeedMps,
-    ),
-  );
+  const blockers: TrafficVehicle[] = [];
+  for (
+    let rowIndex = 0;
+    rowIndex < candidate.rowOffsetsM.length;
+    rowIndex += 1
+  ) {
+    const rowZM = candidate.gateZM + candidate.rowOffsetsM[rowIndex];
+    const encounterId = `gate-${world.tickNumber}-${candidate.attempt}-${rowIndex}`;
+    for (const lane of lanes) {
+      blockers.push(
+        createTrafficVehicle(
+          `${encounterId}-${lane}`,
+          encounterId,
+          candidate.kind,
+          'gate',
+          lane,
+          rowZM,
+          candidate.blockerSpeedMps,
+        ),
+      );
+    }
+  }
+  return blockers;
 }
 
 function plausibleTakeoffTicks(
@@ -1115,13 +1247,15 @@ function plausibleTakeoffTicks(
   return result;
 }
 
-function simulateGateWitness(
+function prepareGateReplayWorlds(
   revealWorld: MutableWorldState,
   candidate: GateCandidate,
   targetLane: LaneIndex,
-  jumpTick: number,
-  recordTrace: boolean,
-): WitnessResult {
+  replayTicks: readonly number[],
+  traceUntilTick: number,
+): PreparedGateReplays {
+  const wantedTicks = new Set(replayTicks);
+  const lastWantedTick = Math.max(...replayTicks);
   const world = cloneWorld(revealWorld);
   const blockers = makeGateBlockers(
     world,
@@ -1129,11 +1263,59 @@ function simulateGateWitness(
     activeLanes(laneMaskAt(world.seed, candidate.gateZM)),
   );
   world.traffic.push(...blockers);
+  const prepared = new Map<number, MutableWorldState>();
+  const prefixWitness: WitnessTracePoint[] = [];
+
+  for (let localTick = 0; localTick <= lastWantedTick; localTick += 1) {
+    if (wantedTicks.has(localTick)) prepared.set(localTick, cloneWorld(world));
+    if (localTick === lastWantedTick) break;
+    const input = witnessInput(world.player, targetLane, localTick, null);
+    const inputTick = world.tickNumber;
+    const outcome = stepWorld(world, input);
+    if (
+      localTick < traceUntilTick &&
+      localTick % LANE_COMMAND_INTERVAL_TICKS === 0
+    ) {
+      prefixWitness.push({
+        tick: inputTick,
+        lane: world.player.lane,
+        xMM: quantize(world.player.xM),
+        zMM: quantize(world.player.absoluteZM),
+        yMM: quantize(world.player.yM),
+        speedMMps: quantize(world.player.speedMps),
+        input: { ...input },
+      });
+    }
+    if ((outcome & WORLD_CRASHED) !== 0) break;
+    retireCompletedOrdinaryTrajectories(world);
+  }
+  return { worlds: prepared, prefixWitness };
+}
+
+function continueGateWitness(
+  world: MutableWorldState,
+  blockers: readonly TrafficVehicle[],
+  candidate: GateCandidate,
+  targetLane: LaneIndex,
+  jumpTick: number,
+  startLocalTick: number,
+  recordTrace: boolean,
+): WitnessResult {
   const witness: WitnessTracePoint[] = [];
   let minimumVerticalClearanceM = Number.POSITIVE_INFINITY;
 
-  for (let localTick = 0; localTick < MAX_WITNESS_TICKS; localTick += 1) {
-    const input = witnessInput(world.player, targetLane, localTick, jumpTick);
+  for (
+    let localTick = startLocalTick;
+    localTick < MAX_WITNESS_TICKS;
+    localTick += 1
+  ) {
+    const input = witnessInput(
+      world.player,
+      targetLane,
+      localTick,
+      jumpTick,
+      candidate.rowOffsetsM.length > 1,
+    );
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
     for (const blocker of blockers) {
@@ -1196,6 +1378,31 @@ function simulateGateWitness(
     verticalClearanceM: minimumVerticalClearanceM,
     clearedAtTick: world.tickNumber,
   };
+}
+
+function simulateGateWitness(
+  revealWorld: MutableWorldState,
+  candidate: GateCandidate,
+  targetLane: LaneIndex,
+  jumpTick: number,
+  recordTrace: boolean,
+): WitnessResult {
+  const world = cloneWorld(revealWorld);
+  const blockers = makeGateBlockers(
+    world,
+    candidate,
+    activeLanes(laneMaskAt(world.seed, candidate.gateZM)),
+  );
+  world.traffic.push(...blockers);
+  return continueGateWitness(
+    world,
+    blockers,
+    candidate,
+    targetLane,
+    jumpTick,
+    0,
+    recordTrace,
+  );
 }
 
 function simulateGroundWitness(
@@ -1322,6 +1529,8 @@ export interface GateCertificationRequest {
   readonly blockerSpeedMps: number;
   readonly targetSpeedMps: number;
   readonly attempt?: number;
+  /** Full-lane row centres relative to gateZM; the first row is always zero. */
+  readonly rowOffsetsM?: readonly number[];
 }
 
 export function certifyJumpGate(
@@ -1344,6 +1553,7 @@ export function certifyJumpGate(
     request.blockerSpeedMps,
     request.targetSpeedMps,
     request.attempt ?? 0,
+    request.rowOffsetsM,
   );
 }
 
@@ -1371,12 +1581,15 @@ export function verifyJumpCertificate(
       rearWarning: request.rearWarning ?? false,
     },
   };
+  const rowOffsetsM = normalizeGateRowOffsets(request.rowOffsetsM);
+  if (rowOffsetsM === null) return false;
   const candidate: GateCandidate = {
     gateZM: request.gateZM,
     kind: request.kind,
     blockerSpeedMps: request.blockerSpeedMps,
     targetSpeedMps: request.targetSpeedMps,
     attempt,
+    rowOffsetsM,
   };
   const expected = certifyGate(
     world.seed,
@@ -1393,6 +1606,7 @@ export function verifyJumpCertificate(
     candidate.blockerSpeedMps,
     candidate.targetSpeedMps,
     candidate.attempt,
+    candidate.rowOffsetsM,
   );
   if (
     expected === null ||
@@ -1720,25 +1934,27 @@ export class AutorooSimulation {
     if (this.activeCertificate) {
       let blockerCount = 0;
       let passedAll = true;
+      let landingReservationEndM = Number.NEGATIVE_INFINITY;
       for (const vehicle of this.traffic) {
         if (vehicle.certificateId !== this.activeCertificate.id) continue;
         blockerCount += 1;
-        if (
-          this.player.absoluteZM <=
+        const passBoundaryM =
           vehicle.absoluteZM +
-            PLAYER_LENGTH_M / 2 +
-            vehicle.lengthM / 2 +
-            LONGITUDINAL_MARGIN_M
-        ) {
+          PLAYER_LENGTH_M / 2 +
+          vehicle.lengthM / 2 +
+          LONGITUDINAL_MARGIN_M;
+        landingReservationEndM = Math.max(
+          landingReservationEndM,
+          passBoundaryM + GATE_LANDING_CLEAR_M,
+        );
+        if (this.player.absoluteZM <= passBoundaryM) {
           passedAll = false;
         }
       }
       passedAll &&= blockerCount > 0;
       const landedBeyondReservation =
         !this.player.airborne &&
-        this.player.absoluteZM >=
-          this.activeCertificate.blockerTrajectories[0].startZM +
-            GATE_LANDING_CLEAR_M;
+        this.player.absoluteZM >= landingReservationEndM;
       if (!passedAll || !landedBeyondReservation) return;
     } else if (
       this.player.absoluteZM <=
@@ -1800,6 +2016,20 @@ export class AutorooSimulation {
         this.encounterCursorM = roadModule.endM + 10;
         continue;
       }
+      if (
+        !isSteadyRoadRange(
+          this.seed,
+          this.encounterCursorM,
+          this.encounterCursorM + ORDINARY_FORWARD_STEADY_M,
+        )
+      ) {
+        const taperStartM = nextTaperStartM(this.seed, this.encounterCursorM);
+        if (Number.isFinite(taperStartM)) {
+          this.encounterCursorM =
+            roadModuleForDistance(this.seed, taperStartM).endM + 10;
+          continue;
+        }
+      }
       this.spawnOrdinaryEncounter(this.encounterCursorM);
       const difficulty = difficultyAt(this.encounterCursorM);
       this.encounterCursorM += ordinaryGapM(
@@ -1850,9 +2080,11 @@ export class AutorooSimulation {
             hashParts(this.seed, this.encounterIndex, first, 311) -
             hashParts(this.seed, this.encounterIndex, second, 311),
         );
+      const blockingPressure = Math.min(1, difficulty * 1.45);
       const blockedCount = Math.min(
         candidates.length,
-        1 + Math.floor(difficulty * Math.max(0, candidates.length - 0.01)),
+        1 +
+          Math.floor(blockingPressure * Math.max(0, candidates.length - 0.01)),
       );
       let currentCars = this.traffic.filter(
         (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
@@ -1862,19 +2094,30 @@ export class AutorooSimulation {
       ).length;
       const drafted: TrafficVehicle[] = [];
       for (let index = 0; index < blockedCount; index += 1) {
-        const busChance = 0.1 + difficulty * 0.25;
-        const kind: VehicleKind =
+        const busChance = 0.12 + difficulty * 0.3;
+        const preferredKind: VehicleKind =
           hashUnit(this.seed, this.encounterIndex, index, 347) < busChance
             ? 'bus'
             : hashParts(this.seed, this.encounterIndex, index, 349) % 2 === 0
               ? 'sedan'
               : 'suv';
-        if (
-          (kind === 'bus' && currentBuses >= MAX_FRONT_BUSES - 4) ||
-          (kind !== 'bus' && currentCars >= MAX_FRONT_CARS - 4)
+        let kind = preferredKind;
+        if (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) {
+          kind =
+            hashParts(this.seed, this.encounterIndex, index, 353) % 2 === 0
+              ? 'sedan'
+              : 'suv';
+        } else if (
+          kind !== 'bus' &&
+          currentCars >= RENDER_POOL_LIMITS.frontCars
         ) {
-          continue;
+          kind = 'bus';
         }
+        if (
+          (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) ||
+          (kind !== 'bus' && currentCars >= RENDER_POOL_LIMITS.frontCars)
+        )
+          continue;
         if (kind === 'bus') currentBuses += 1;
         else currentCars += 1;
         drafted.push(
@@ -1974,28 +2217,54 @@ export class AutorooSimulation {
       return;
     }
     this.pendingGateAttempted = true;
+    const gateDifficulty = difficultyAt(this.player.maxForwardM);
     const preferSuv =
-      difficultyAt(this.player.maxForwardM) > 0.45 &&
+      gateDifficulty > 0.45 &&
       hashParts(this.seed, this.gateIndex, 401) % 3 === 0;
+    const requestedRows =
+      this.gateIndex === 0
+        ? 2
+        : gateDifficulty < 0.99 ||
+            (gateDifficulty < 0.999 &&
+              hashParts(this.seed, this.gateIndex, 409) % 4 === 0)
+          ? 3
+          : 4;
+    const gateLaneCount = activeLanes(
+      laneMaskAt(this.seed, this.pendingGateZM),
+    ).length;
+    const currentFrontCars = this.traffic.filter(
+      (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
+    ).length;
+    const availableRows = Math.floor(
+      (RENDER_POOL_LIMITS.frontCars - currentFrontCars) / gateLaneCount,
+    );
+    if (availableRows < 1) {
+      this.replacePendingGateWithOrdinary();
+      return;
+    }
+    const desiredRows = Math.min(requestedRows, availableRows);
     // The compact jump still clears ordinary buses at full speed, but their
     // long collider cannot offer the mandatory 0.25 s input window. Certified
-    // all-lane gates therefore use shorter cars and SUVs only.
-    const attempts: readonly [VehicleKind, number, number][] = preferSuv
-      ? [
-          ['suv', 3, 28],
-          ['sedan', 4, 28],
-          ['suv', 2.5, 28],
-          ['sedan', 3.5, 27],
-        ]
-      : [
-          ['sedan', 4, 28],
-          ['suv', 3, 28],
-          ['sedan', 3.5, 27],
-          ['suv', 2.5, 28],
-        ];
+    // all-lane gauntlets therefore use shorter cars and SUVs only. The final
+    // attempt deliberately degrades to one row instead of stalling generation.
+    const attempts: readonly [VehicleKind, number, number, number, number][] =
+      preferSuv
+        ? [
+            ['suv', 3, 28, desiredRows, 1],
+            ['sedan', 4, 28, desiredRows, 1],
+            ['suv', 2.5, 28, Math.max(1, desiredRows - 1), 1.015],
+            ['sedan', 3.5, 27, 1, 1],
+          ]
+        : [
+            ['sedan', 4, 28, desiredRows, 1],
+            ['suv', 3, 28, desiredRows, 1],
+            ['sedan', 3.5, 27, Math.max(1, desiredRows - 1), 1.015],
+            ['suv', 2.5, 28, 1, 1],
+          ];
     let certificate: ChallengeCertificate | null = null;
     for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-      const [kind, blockerSpeed, targetSpeed] = attempts[attempt];
+      const [kind, blockerSpeed, targetSpeed, rowCount, spacingScale] =
+        attempts[attempt];
       certificate = certifyGate(
         this.seed,
         this.tickNumber,
@@ -2011,10 +2280,14 @@ export class AutorooSimulation {
         blockerSpeed,
         targetSpeed,
         attempt,
+        jumpChainOffsetsM(rowCount, blockerSpeed, spacingScale),
       );
       if (certificate) break;
     }
-    if (!certificate) return;
+    if (!certificate) {
+      this.replacePendingGateWithOrdinary();
+      return;
+    }
 
     this.activeCertificate = certificate;
     for (const trajectory of certificate.blockerTrajectories) {
@@ -2032,6 +2305,29 @@ export class AutorooSimulation {
       );
     }
     this.emitEvent({ type: 'warning' });
+  }
+
+  private replacePendingGateWithOrdinary(): void {
+    // A rejected jump draft becomes a certified ordinary row, then normal
+    // dense generation resumes immediately beyond it. This preserves the
+    // fail-open invariant without leaving the whole reserved landing corridor
+    // visibly empty.
+    const fallbackGateZM = this.pendingGateZM;
+    const fallbackEncounterIndex = this.encounterIndex;
+    this.spawnOrdinaryEncounter(fallbackGateZM);
+    this.encounterIndex += 1;
+    this.lastGateZM = fallbackGateZM;
+    this.scheduleNextGate();
+    this.encounterCursorM = Math.min(
+      this.encounterCursorM,
+      fallbackGateZM +
+        ordinaryGapM(
+          this.seed,
+          fallbackEncounterIndex,
+          difficultyAt(fallbackGateZM),
+        ),
+    );
+    this.fillAhead();
   }
 
   snapshot(): RunSnapshot {

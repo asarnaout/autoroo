@@ -314,16 +314,16 @@ describe('procedural road topology', () => {
     expect(lateChanges).toBeGreaterThan(earlyChanges * 2);
   });
 
-  it('reaches most of the bounded difficulty within the first few kilometres', () => {
+  it('reaches most of the bounded difficulty within the first kilometre', () => {
     expect(difficultyAt(0)).toBe(0);
-    expect(difficultyAt(500)).toBeGreaterThan(0.34);
-    expect(difficultyAt(1000)).toBeGreaterThan(0.56);
-    expect(difficultyAt(2000)).toBeGreaterThan(0.81);
-    expect(difficultyAt(4000)).toBeGreaterThan(0.96);
+    expect(difficultyAt(500)).toBeGreaterThan(0.5);
+    expect(difficultyAt(1000)).toBeGreaterThan(0.75);
+    expect(difficultyAt(2000)).toBeGreaterThan(0.94);
+    expect(difficultyAt(4000)).toBeGreaterThan(0.996);
     expect(difficultyAt(20_000)).toBeLessThanOrEqual(1);
   });
 
-  it('contracts ordinary encounter scheduling from roughly 112 m to 36 m', () => {
+  it('contracts ordinary rows from roughly 84 m to a 22–30 m dense core', () => {
     const early: number[] = [];
     const late: number[] = [];
     for (let seed = 0; seed < 1000; seed += 1) {
@@ -332,12 +332,12 @@ describe('procedural road topology', () => {
     }
     const mean = (values: number[]) =>
       values.reduce((sum, value) => sum + value, 0) / values.length;
-    expect(mean(early)).toBeCloseTo(112, 0);
-    expect(mean(late)).toBeCloseTo(36, 0);
-    expect(Math.min(...early)).toBeGreaterThanOrEqual(107);
-    expect(Math.max(...early)).toBeLessThanOrEqual(117);
-    expect(Math.min(...late)).toBeGreaterThanOrEqual(31);
-    expect(Math.max(...late)).toBeLessThanOrEqual(41);
+    expect(mean(early)).toBeCloseTo(84, 0);
+    expect(mean(late)).toBeCloseTo(26, 0);
+    expect(Math.min(...early)).toBeGreaterThanOrEqual(80);
+    expect(Math.max(...early)).toBeLessThanOrEqual(88);
+    expect(Math.min(...late)).toBeGreaterThanOrEqual(22);
+    expect(Math.max(...late)).toBeLessThanOrEqual(30);
   });
 
   it('moves each scheduled gate into a transition-free reservation', () => {

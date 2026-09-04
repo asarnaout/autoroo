@@ -61,8 +61,10 @@ export function certificateBotInput(
       accelerate: localTick >= 45,
       brake: false,
       laneDelta,
+      // Mirrors a player holding Space: the production simulation ignores the
+      // input in the air and immediately takes off again after each landing.
       jumpPressed:
-        snapshot.tick ===
+        snapshot.tick >=
         Math.floor((jump.safeTakeoffTickMin + jump.safeTakeoffTickMax) / 2),
     };
   }

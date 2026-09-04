@@ -28,6 +28,7 @@ import {
   collidesSwept,
   computeGateWindow,
   createTrafficVehicle,
+  jumpChainOffsetsM,
   runRenderSchedule,
   verifyJumpCertificate,
 } from '../app/game/simulation';
@@ -170,6 +171,17 @@ describe('fixed-step vehicle physics', () => {
 
     expect(state.airborne).toBe(true);
     expect(state.jumpElapsedS).toBe(FIXED_DT);
+  });
+
+  it('keeps an exact 51-tick rhythm across a held-jump chain', () => {
+    const state = player({ speedMps: MAX_SPEED_MPS });
+    const takeoffTicks: number[] = [];
+    for (let tick = 0; tick <= 153; tick += 1) {
+      const wasAirborne = state.airborne;
+      advancePlayerPhysics(state, { ...idle, jumpPressed: true });
+      if (!wasAirborne && state.airborne) takeoffTicks.push(tick);
+    }
+    expect(takeoffTicks).toEqual([0, 51, 102, 153]);
   });
 });
 
@@ -628,6 +640,51 @@ describe('winnability certificates', () => {
     }
   }, 30_000);
 
+  it('certifies a tight four-row gate for one continuous held jump input', () => {
+    const seed = 13;
+    const gateZM = gateFor(seed);
+    const rowOffsetsM = jumpChainOffsetsM(4, 4);
+    const request = {
+      seed,
+      tick: 400,
+      player: player({
+        absoluteZM: gateZM - 200,
+        previousZM: gateZM - 200,
+        maxForwardM: gateZM - 200,
+      }),
+      gateZM,
+      kind: 'sedan' as const,
+      blockerSpeedMps: 4,
+      targetSpeedMps: 28,
+      rowOffsetsM,
+    };
+    const certificate = certifyJumpGate(request);
+    expect(certificate).not.toBeNull();
+    expect(verifyJumpCertificate(request, certificate!)).toBe(true);
+    expect(certificate!.blockerIds).toHaveLength(
+      activeLanes(roadModuleForDistance(seed, gateZM).fromLaneMask).length * 4,
+    );
+    expect(
+      new Set(
+        certificate!.blockerTrajectories.map((trajectory) =>
+          Math.round((trajectory.startZM - gateZM) * 1000),
+        ),
+      ).size,
+    ).toBe(4);
+    expect(
+      certificate!.witness.filter((point) => point.input.jumpPressed).length,
+    ).toBeGreaterThan(1);
+    const alteredRows = rowOffsetsM.map((offsetM, index) =>
+      index === 2 ? offsetM + 0.01 : offsetM,
+    );
+    expect(
+      verifyJumpCertificate(
+        { ...request, rowOffsetsM: alteredRows },
+        certificate!,
+      ),
+    ).toBe(false);
+  }, 30_000);
+
   it('certifies and binds an exact mid-flip reveal state', () => {
     const seed = 17;
     const gateZM = gateFor(seed);
@@ -847,7 +904,7 @@ describe('winnability certificates', () => {
     }
   });
 
-  it('falls back to clear road after an invalid four-candidate gate without stalling', () => {
+  it('reschedules immediately after an invalid four-candidate gate without stalling', () => {
     const seed = 42;
     const transition = Array.from({ length: 20 }, (_, index) =>
       roadModuleAt(seed, index),
@@ -871,26 +928,13 @@ describe('winnability certificates', () => {
       activeCertificate: null,
     });
     simulation.tick(accelerate);
-    expect(simulation.debugGateState()).toMatchObject({
-      pendingGateZM: invalidGateZM,
-      pendingGateAttempted: true,
-      activeCertificate: null,
-    });
-    expect(
-      simulation.renderTraffic.some((vehicle) => vehicle.role === 'gate'),
-    ).toBe(false);
-
-    simulation.__debugReplaceTraffic([]);
-    simulation.__debugSetPlayer({
-      absoluteZM: invalidGateZM + 71,
-      previousZM: invalidGateZM + 71,
-      speedMps: 30,
-      maxForwardM: invalidGateZM + 71,
-    });
-    simulation.tick(accelerate);
     const next = simulation.debugGateState();
     expect(next.pendingGateAttempted).toBe(false);
     expect(next.pendingGateZM).toBeGreaterThanOrEqual(invalidGateZM + 500);
+    expect(next.activeCertificate).toBeNull();
+    expect(
+      simulation.renderTraffic.some((vehicle) => vehicle.role === 'gate'),
+    ).toBe(false);
   });
 
   it('advances generation from the exact end of a failed gate reservation', () => {
@@ -932,69 +976,13 @@ describe('winnability certificates', () => {
       const snapshot = simulation.snapshot();
       widestRoad = Math.max(widestRoad, snapshot.laneCount);
       const certificate = snapshot.activeCertificate;
-      let input: InputFrame = accelerate;
       if (certificate) {
         sawGate = true;
         gateId = certificate.id;
-        const localTick = snapshot.tick - certificate.revealTick;
-        let laneDelta: -1 | 0 | 1 = 0;
-        if (
-          localTick >= 45 &&
-          localTick % 6 === 0 &&
-          snapshot.player.lane !== certificate.targetLane
-        ) {
-          laneDelta = snapshot.player.lane < certificate.targetLane ? 1 : -1;
-        }
-        input = {
-          accelerate: localTick >= 45,
-          brake: false,
-          laneDelta,
-          jumpPressed:
-            snapshot.tick ===
-            Math.floor(
-              (certificate.safeTakeoffTickMin +
-                certificate.safeTakeoffTickMax) /
-                2,
-            ),
-        };
       } else {
         if (gateId) clearedGate = true;
-        const ahead = simulation.renderTraffic
-          .filter(
-            (vehicle) =>
-              vehicle.role === 'ordinary' &&
-              vehicle.absoluteZM > snapshot.player.absoluteZM &&
-              vehicle.absoluteZM - snapshot.player.absoluteZM < 90,
-          )
-          .sort((first, second) => first.absoluteZM - second.absoluteZM);
-        if (ahead.length > 0) {
-          const rowZ = ahead[0].absoluteZM;
-          const blocked = new Set(
-            ahead
-              .filter((vehicle) => Math.abs(vehicle.absoluteZM - rowZ) < 10)
-              .map((vehicle) => vehicle.lane),
-          );
-          if (blocked.has(snapshot.player.lane)) {
-            const escape = activeLanes(snapshot.laneMask).find(
-              (lane) =>
-                !blocked.has(lane) &&
-                Math.abs(lane - snapshot.player.lane) <= 1 &&
-                !snapshot.traffic.some(
-                  (vehicle) =>
-                    vehicle.lane === lane &&
-                    Math.abs(vehicle.absoluteZM - snapshot.player.absoluteZM) <
-                      15,
-                ),
-            );
-            if (escape !== undefined) {
-              input = {
-                ...accelerate,
-                laneDelta: escape > snapshot.player.lane ? 1 : -1,
-              };
-            }
-          }
-        }
       }
+      const input = certificateBotInput(simulation, snapshot);
       simulation.tick(input);
       expect(
         simulation.phaseName,

@@ -31,6 +31,8 @@ describe.runIf(stress)('long-run procedural stress', () => {
       let maxBuses = 0;
       let maxRearCars = 0;
       let maxGroundCertificates = 0;
+      let emptyViewStartedM: number | null = null;
+      let maxEmptyViewM = 0;
       let steps = 0;
 
       while (simulation.renderPlayer.absoluteZM < 100_000 && steps < 260_000) {
@@ -45,6 +47,22 @@ describe.runIf(stress)('long-run procedural stress', () => {
         else if (activeGateId) {
           clearedGates.add(activeGateId);
           activeGateId = null;
+        }
+
+        const hasVisibleObstacle = snapshot.traffic.some(
+          (vehicle) =>
+            vehicle.role !== 'rear-pressure' &&
+            vehicle.absoluteZM > snapshot.player.absoluteZM &&
+            vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
+        );
+        if (!hasVisibleObstacle) {
+          emptyViewStartedM ??= snapshot.player.absoluteZM;
+        } else if (emptyViewStartedM !== null) {
+          maxEmptyViewM = Math.max(
+            maxEmptyViewM,
+            snapshot.player.absoluteZM - emptyViewStartedM,
+          );
+          emptyViewStartedM = null;
         }
 
         const input = certificateBotInput(simulation, snapshot);
@@ -86,8 +104,8 @@ describe.runIf(stress)('long-run procedural stress', () => {
         expect(counts.rearCars).toBeLessThanOrEqual(4);
         expect(counts.totalTraffic).toBeLessThanOrEqual(60);
         expect(counts.activeCertificates).toBeLessThanOrEqual(1);
-        expect(counts.groundCertificates).toBeLessThanOrEqual(12);
-        expect(counts.witnessPoints).toBeLessThanOrEqual(1200);
+        expect(counts.groundCertificates).toBeLessThanOrEqual(18);
+        expect(counts.witnessPoints).toBeLessThanOrEqual(2000);
         expect(
           new Set(simulation.renderTraffic.map((vehicle) => vehicle.id)).size,
         ).toBe(simulation.renderTraffic.length);
@@ -100,7 +118,7 @@ describe.runIf(stress)('long-run procedural stress', () => {
       expect(final.difficulty).toBeGreaterThan(0.999);
       expect(laneCounts).toEqual(new Set([2, 3, 4]));
       // Exact moving-trajectory reservations and obstacle-free tapers still
-      // reject some candidates from the bounded 31–41 m late-game cadence.
+      // reject some candidates from the bounded 22–30 m late-game cadence.
       // Both challenge kinds must nevertheless recur throughout the run.
       expect(clearedGates.size).toBeGreaterThan(40);
       expect(ordinaryEncounters.size).toBeGreaterThan(500);
@@ -109,6 +127,7 @@ describe.runIf(stress)('long-run procedural stress', () => {
       expect(maxBuses).toBeGreaterThan(0);
       expect(maxRearCars).toBeLessThanOrEqual(4);
       expect(maxGroundCertificates).toBeGreaterThan(0);
+      expect(maxEmptyViewM).toBeLessThanOrEqual(260);
     }
   }, 120_000);
 });

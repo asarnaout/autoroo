@@ -30,9 +30,9 @@ export const JUMP_FLIGHT_SECONDS = (2 * JUMP_IMPULSE_MPS) / GRAVITY_MPS2;
 export const JUMP_APEX_M =
   (JUMP_IMPULSE_MPS * JUMP_IMPULSE_MPS) / (2 * GRAVITY_MPS2);
 
-// The run should feel noticeably busier within its first minute, while every
-// difficulty-dependent rule still approaches a fixed cap.
-export const DIFFICULTY_DISTANCE_SCALE_M = 1200;
+// The calm opening is deliberately short: by the first kilometre Autoroo is
+// already close to its bounded, high-density traffic cap.
+export const DIFFICULTY_DISTANCE_SCALE_M = 700;
 
 export const PLAYER_LENGTH_M = 3.6;
 export const LONGITUDINAL_MARGIN_M = 0.25;
@@ -44,7 +44,9 @@ export const GATE_LANDING_CLEAR_M = 70;
 export const GATE_WITNESS_LIMIT_S = 20;
 // This covers every built-in sedan/SUV gate trajectory, landing zone, and
 // combined collider without coupling road topology to the selected attempt.
-export const GATE_FORWARD_STEADY_M = 160;
+// Multi-row hop gauntlets can occupy a little over 80 m before their moving
+// blockers and landing corridor are accounted for.
+export const GATE_FORWARD_STEADY_M = 245;
 
 export const VEHICLE_DIMENSIONS: Readonly<
   Record<VehicleKind, { lengthM: number; widthM: number; heightM: number }>

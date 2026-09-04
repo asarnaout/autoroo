@@ -11,7 +11,8 @@ modification record. CC0 credits are retained voluntarily.
 - **sports-bbb1c718.glb, sedan-bf00f2f0.glb, suv-1a9ce2bb.glb** — low-poly cars
   by **Quaternius** (<https://quaternius.com>), released **CC0 1.0**
   (<https://creativecommons.org/publicdomain/zero/1.0/>). The inherited bytes are
-  unchanged; Autoroo recolours the named solid body materials at runtime.
+  unchanged; Autoroo recolours the named solid body materials and makes the
+  authored head/tail lenses emissive at runtime.
 - **shop-28927811.glb** ("Building") — by **Kay Lousberg** via Poly Pizza
   (<https://poly.pizza/m/EL3ePInr1N>), released **CC0 1.0**. Inherited unchanged.
 - **nyc-tower-a-43bbf652.glb, nyc-tower-b-9e4587c6.glb,
@@ -38,7 +39,8 @@ modification record. CC0 credits are retained voluntarily.
   (<https://poly.pizza/m/bsvS0E1eo4R>), licensed **CC-BY 3.0**
   (<https://creativecommons.org/licenses/by/3.0/>). Required credit:
   **"jeremy" (Poly Pizza)**. The inherited bytes are unchanged; Autoroo
-  recolours material `039BE5` at runtime.
+  recolours material `039BE5` and makes its mapped front/rear lenses emissive
+  at runtime.
 
 ## Music — Suno paid-plan output
 
@@ -59,9 +61,11 @@ modification record. CC0 credits are retained voluntarily.
 ## Adapted first-party code
 
 Road surfaces, lane markings, merge signs, the start countdown light, warning
-lights, and related Babylon presentation techniques are newly reduced/adapted
-from Curbside Rush's first-party procedural code. The inherited MIT notice is
-preserved in `LICENSE` (Copyright (c) 2026 Ahmed Arnaout). Autoroo's endless
+lights, blue-hour sky and light rig, glass-only window glow, procedural
+streetlights, additive pavement light pools, and related Babylon presentation
+techniques are newly reduced/adapted from Curbside Rush's first-party code. The
+inherited MIT notice is preserved in `LICENSE` (Copyright (c) 2026 Ahmed
+Arnaout). Autoroo's endless
 topology, deterministic fixed-tick simulation, gate certification, rear pressure,
 render pools, HUD, synthesised sound effects, and WebMCP integration are
 Autoroo-specific work.

@@ -107,10 +107,27 @@ describe('curated asset supply chain', () => {
       yaw: 0,
       bodyMaterials: ['White'],
       color: '#071b3f',
+      headlightMaterials: ['Headlights'],
+      taillightMaterials: ['TailLights'],
     });
-    expect(MODEL_CONFIGS.sedan).toMatchObject({ scale: 1.08, yaw: 0 });
-    expect(MODEL_CONFIGS.suv).toMatchObject({ scale: 1.03, yaw: 0 });
-    expect(MODEL_CONFIGS.bus).toMatchObject({ scale: 0.24, yaw: 0 });
+    expect(MODEL_CONFIGS.sedan).toMatchObject({
+      scale: 1.08,
+      yaw: 0,
+      headlightMaterials: ['Headlights'],
+      taillightMaterials: ['TailLights'],
+    });
+    expect(MODEL_CONFIGS.suv).toMatchObject({
+      scale: 1.03,
+      yaw: 0,
+      headlightMaterials: ['Headlights'],
+      taillightMaterials: ['TailLights'],
+    });
+    expect(MODEL_CONFIGS.bus).toMatchObject({
+      scale: 0.24,
+      yaw: 0,
+      headlightMaterials: ['FF9800'],
+      taillightMaterials: ['F44336'],
+    });
     expect(VEHICLE_DIMENSIONS.sedan).toEqual({
       lengthM: 4,
       widthM: 1.8,

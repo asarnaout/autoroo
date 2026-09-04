@@ -8,6 +8,7 @@ export const THREE_RIGHT = 0b1110;
 export const FOUR_LANES = 0b1111;
 export const MODULE_LENGTH_M = 100;
 export const ROAD_TILE_LENGTH_M = 40;
+export const ROAD_SIDEWALK_WIDTH_M = 1.15;
 export const RENDER_POOL_LIMITS = Object.freeze({
   frontCars: 40,
   buses: 16,

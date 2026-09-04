@@ -1,19 +1,24 @@
 import type { AssetContainer } from '@babylonjs/core/assetContainer';
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer';
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera';
+import { Constants } from '@babylonjs/core/Engines/constants';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight';
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { LoadAssetContainerAsync } from '@babylonjs/core/Loading/sceneLoader';
+import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration';
 import { Material } from '@babylonjs/core/Materials/material';
 import { PBRMaterial } from '@babylonjs/core/Materials/PBR/pbrMaterial';
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
+import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture';
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder';
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder';
 import { CreateDisc } from '@babylonjs/core/Meshes/Builders/discBuilder';
 import { CreateGround } from '@babylonjs/core/Meshes/Builders/groundBuilder';
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
+import '@babylonjs/core/Meshes/instancedMesh';
 import { Mesh } from '@babylonjs/core/Meshes/mesh';
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode';
@@ -33,6 +38,7 @@ import {
   FIXED_DT,
   LANE_X,
   RENDER_POOL_LIMITS,
+  ROAD_SIDEWALK_WIDTH_M,
   ROAD_TILE_LENGTH_M,
   activeLanes,
   hasLane,
@@ -52,6 +58,19 @@ import {
   laneChangeAnimationPose,
 } from './laneChangeAnimation';
 import {
+  NIGHT_PALETTE,
+  STREETLIGHT_POOL_SIZE,
+  STREETLIGHT_SPACING_M,
+  firstStreetlightStation,
+  isNightWindowMaterialName,
+  isStreetlightVisible,
+  streetlightPlacement,
+  streetlightPoolSlot,
+  streetlightSide,
+  type StreetlightSide,
+} from './nightEnvironment';
+import {
+  BUILDING_KEYS,
   BUILDING_STATION_POOL_SIZE,
   BUILDING_STATION_SPACING_M,
   firstRoadsideBuildingStation,
@@ -86,6 +105,12 @@ interface SceneryEntry extends VisualEntry {
   absoluteStation: number | null;
 }
 
+interface StreetlightEntry {
+  readonly root: TransformNode;
+  readonly side: StreetlightSide;
+  absoluteStation: number | null;
+}
+
 interface DynamicRoadMesh {
   readonly mesh: Mesh;
   readonly positions: Float32Array;
@@ -106,7 +131,6 @@ interface FallbackPlayerVisual {
 const ROAD_SAMPLE_INTERVAL_M = 2;
 const ROAD_SECTION_COUNT = ROAD_TILE_LENGTH_M / ROAD_SAMPLE_INTERVAL_M + 1;
 const ROAD_HALF_WIDTH_MAX_M = 7.2;
-const SIDEWALK_WIDTH_M = 1.15;
 const DASHES_PER_TILE = 4;
 const DASH_LENGTH_M = 4.8;
 const DASH_WIDTH_M = 0.13;
@@ -187,6 +211,7 @@ export class BabylonGameSession {
   private readonly busPool: VisualEntry[] = [];
   private readonly rearPool: VisualEntry[] = [];
   private readonly sceneryPool: (SceneryEntry | null)[] = [];
+  private readonly streetlightPool: StreetlightEntry[] = [];
   private readonly transitionSigns: TransformNode[] = [];
   private readonly gateLights: TransformNode[] = [];
   private playerVisual: VisualEntry | null = null;
@@ -265,13 +290,24 @@ export class BabylonGameSession {
     });
     this.engine.setHardwareScalingLevel(this.scalingLevel);
     this.scene = new Scene(this.engine);
-    const skyColor = Color3.FromHexString('#6b9bbc');
-    this.scene.clearColor = new Color4(skyColor.r, skyColor.g, skyColor.b, 1);
+    const horizonColor = Color3.FromHexString(NIGHT_PALETTE.skyHorizon);
+    this.scene.clearColor = new Color4(
+      horizonColor.r,
+      horizonColor.g,
+      horizonColor.b,
+      1,
+    );
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
     this.scene.fogStart = 145;
     this.scene.fogEnd = 265;
-    this.scene.fogColor = skyColor;
+    this.scene.fogColor = Color3.FromHexString(NIGHT_PALETTE.fog);
+    this.scene.ambientColor = new Color3(0.23, 0.22, 0.26);
     this.scene.skipPointerMovePicking = true;
+    const grade = this.scene.imageProcessingConfiguration;
+    grade.toneMappingEnabled = true;
+    grade.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
+    grade.exposure = 1.55;
+    grade.contrast = 1.12;
 
     this.camera = new FreeCamera(
       'chase-camera',
@@ -285,22 +321,26 @@ export class BabylonGameSession {
     this.camera.setTarget(this.target);
 
     const sky = new HemisphericLight(
-      'toy-sky-light',
-      new Vector3(0, 1, 0),
+      'blue-hour-sky-light',
+      new Vector3(0.1, 1, 0.15),
       this.scene,
     );
-    sky.intensity = 0.82;
-    sky.groundColor = Color3.FromHexString('#3b4041');
+    sky.intensity = 0.68;
+    sky.diffuse = new Color3(0.44, 0.54, 0.76);
+    sky.groundColor = new Color3(0.38, 0.29, 0.18);
     const sun = new DirectionalLight(
-      'toy-sun',
-      new Vector3(-0.35, -1, 0.48),
+      'blue-hour-moon-key',
+      new Vector3(-0.42, -1, 0.48),
       this.scene,
     );
     sun.position.set(35, 48, -26);
-    sun.intensity = 1;
+    sun.intensity = 0.64;
+    sun.diffuse = Color3.FromHexString('#ffddab');
 
     this.simulation = new AutorooSimulation(seed);
+    this.buildNightSky();
     this.buildGround();
+    this.buildStreetlights();
     this.fallbackPlayer = this.buildFallbackPlayer();
     this.countdownLight = this.buildCountdownLight();
     this.buildTransitionSigns();
@@ -382,6 +422,160 @@ export class BabylonGameSession {
     this.canvas.addEventListener('pointerdown', this.focusCanvas);
   }
 
+  private buildNightSky(): void {
+    const height = 256;
+    const texture = new DynamicTexture(
+      'autoroo-night-gradient',
+      { width: 4, height },
+      this.scene,
+      false,
+    );
+    const context = texture.getContext() as unknown as CanvasRenderingContext2D;
+    // Babylon samples the uploaded canvas upside-down on the inside of this
+    // dome, so the canvas bottom is the zenith and the top is the horizon.
+    const gradient = context.createLinearGradient(0, height, 0, 0);
+    gradient.addColorStop(0, NIGHT_PALETTE.skyTop);
+    gradient.addColorStop(0.5, '#182744');
+    gradient.addColorStop(0.8, '#243755');
+    gradient.addColorStop(1, NIGHT_PALETTE.skyHorizon);
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 4, height);
+    texture.update();
+
+    const material = new StandardMaterial('night-sky-dome-mat', this.scene);
+    material.emissiveTexture = texture;
+    material.diffuseColor = Color3.Black();
+    material.specularColor = Color3.Black();
+    material.disableLighting = true;
+    material.fogEnabled = false;
+    material.freeze();
+
+    const dome = CreateSphere(
+      'night-sky-dome',
+      {
+        diameter: 548,
+        segments: 12,
+        sideOrientation: Mesh.BACKSIDE,
+      },
+      this.scene,
+    );
+    dome.material = material;
+    dome.infiniteDistance = true;
+    dome.isPickable = false;
+    dome.applyFog = false;
+  }
+
+  private buildStreetlights(): void {
+    const iron = makeMaterial(this.scene, 'streetlight-iron', '#15191f');
+    const lampHead = makeMaterial(
+      this.scene,
+      'streetlight-warm-head',
+      NIGHT_PALETTE.lampWarm,
+    );
+    lampHead.emissiveColor = new Color3(1.5, 0.86, 0.34);
+
+    const poolTexture = new DynamicTexture(
+      'streetlight-pool-texture',
+      { width: 128, height: 128 },
+      this.scene,
+      true,
+    );
+    const context =
+      poolTexture.getContext() as unknown as CanvasRenderingContext2D;
+    const gradient = context.createRadialGradient(64, 64, 2, 64, 64, 62);
+    gradient.addColorStop(0, 'rgba(255,196,120,0.72)');
+    gradient.addColorStop(0.22, 'rgba(255,175,100,0.45)');
+    gradient.addColorStop(0.55, 'rgba(255,150,78,0.18)');
+    gradient.addColorStop(1, 'rgba(255,140,60,0)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 128, 128);
+    poolTexture.update(false);
+    poolTexture.hasAlpha = true;
+
+    const poolMaterial = new StandardMaterial(
+      'streetlight-pavement-pool',
+      this.scene,
+    );
+    poolMaterial.emissiveColor = new Color3(0.62, 0.4, 0.17);
+    poolMaterial.emissiveTexture = poolTexture;
+    poolMaterial.opacityTexture = poolTexture;
+    poolMaterial.alphaMode = Constants.ALPHA_ADD;
+    poolMaterial.diffuseColor = Color3.Black();
+    poolMaterial.specularColor = Color3.Black();
+    poolMaterial.disableLighting = true;
+    poolMaterial.disableDepthWrite = true;
+
+    // Four off-camera source meshes feed every pooled fixture. Babylon batches
+    // each source with its instances, so the avenue adds four geometry groups
+    // rather than four fresh uploads and draw groups per lamp.
+    const poleSource = CreateCylinder(
+      'streetlight-pole-source',
+      { height: 5.2, diameter: 0.16, tessellation: 8 },
+      this.scene,
+    );
+    poleSource.position.y = -1_000;
+    poleSource.material = iron;
+    poleSource.isPickable = false;
+    poleSource.receiveShadows = false;
+    const armSource = CreateBox(
+      'streetlight-arm-source',
+      { width: 1.4, height: 0.09, depth: 0.09 },
+      this.scene,
+    );
+    armSource.position.y = -1_000;
+    armSource.material = iron;
+    armSource.isPickable = false;
+    armSource.receiveShadows = false;
+    const headSource = CreateBox(
+      'streetlight-head-source',
+      { width: 0.55, height: 0.12, depth: 0.26 },
+      this.scene,
+    );
+    headSource.position.y = -1_000;
+    headSource.material = lampHead;
+    headSource.isPickable = false;
+    headSource.receiveShadows = false;
+    const poolSource = CreateGround(
+      'streetlight-pool-source',
+      { width: 10, height: 10, subdivisions: 1 },
+      this.scene,
+    );
+    poolSource.position.y = -1_000;
+    poolSource.material = poolMaterial;
+    poolSource.isPickable = false;
+    poolSource.receiveShadows = false;
+
+    for (let slot = 0; slot < STREETLIGHT_POOL_SIZE; slot += 1) {
+      const side = streetlightSide(slot);
+      const root = new TransformNode(`streetlight-${slot}`, this.scene);
+      const pole = poleSource.createInstance(`streetlight-pole-${slot}`);
+      pole.position.y = 2.6;
+      pole.parent = root;
+      pole.isPickable = false;
+
+      const arm = armSource.createInstance(`streetlight-arm-${slot}`);
+      arm.position.set(-side * 0.6, 5.15, 0);
+      arm.parent = root;
+      arm.isPickable = false;
+
+      const head = headSource.createInstance(`streetlight-head-${slot}`);
+      head.position.set(-side * 1.25, 5.08, 0);
+      head.parent = root;
+      head.isPickable = false;
+
+      const pool = poolSource.createInstance(`streetlight-pool-${slot}`);
+      pool.position.set(-side * 2.1, 0.11, 0);
+      pool.parent = root;
+      pool.isPickable = false;
+
+      root.setEnabled(false);
+      this.streetlightPool.push({ root, side, absoluteStation: null });
+    }
+    iron.freeze();
+    lampHead.freeze();
+    poolMaterial.freeze();
+  }
+
   private createDynamicRoadMesh(
     name: string,
     positions: Float32Array,
@@ -441,7 +635,7 @@ export class BabylonGameSession {
       writeVertex(
         positions,
         vertex,
-        -ROAD_HALF_WIDTH_MAX_M - SIDEWALK_WIDTH_M,
+        -ROAD_HALF_WIDTH_MAX_M - ROAD_SIDEWALK_WIDTH_M,
         z,
       );
       writeVertex(positions, vertex + 1, -ROAD_HALF_WIDTH_MAX_M, z);
@@ -449,7 +643,7 @@ export class BabylonGameSession {
       writeVertex(
         positions,
         vertex + 3,
-        ROAD_HALF_WIDTH_MAX_M + SIDEWALK_WIDTH_M,
+        ROAD_HALF_WIDTH_MAX_M + ROAD_SIDEWALK_WIDTH_M,
         z,
       );
     }
@@ -523,15 +717,23 @@ export class BabylonGameSession {
     const groundMaterial = makeMaterial(
       this.scene,
       'urban-ground-mat',
-      '#465155',
+      NIGHT_PALETTE.ground,
     );
-    const roadMaterial = makeMaterial(this.scene, 'road-mat', '#2f3438');
+    const roadMaterial = makeMaterial(
+      this.scene,
+      'road-mat',
+      NIGHT_PALETTE.road,
+    );
     const shoulderMaterial = makeMaterial(
       this.scene,
       'sidewalk-mat',
-      '#849096',
+      NIGHT_PALETTE.pavement,
     );
-    const paintMaterial = makeMaterial(this.scene, 'paint-mat', '#e7e5dc');
+    const paintMaterial = makeMaterial(
+      this.scene,
+      'paint-mat',
+      NIGHT_PALETTE.roadPaint,
+    );
     groundMaterial.freeze();
     roadMaterial.freeze();
     shoulderMaterial.freeze();
@@ -601,6 +803,9 @@ export class BabylonGameSession {
     const red = makeMaterial(this.scene, 'countdown-red', '#ff5f57');
     const yellow = makeMaterial(this.scene, 'countdown-yellow', '#f6d94f');
     const green = makeMaterial(this.scene, 'countdown-green', '#63d474');
+    red.emissiveColor = new Color3(0.9, 0.05, 0.03);
+    yellow.emissiveColor = new Color3(0.8, 0.58, 0.12);
+    green.emissiveColor = new Color3(0.2, 0.8, 0.34);
     const pole = CreateBox(
       'countdown-pole',
       { width: 0.24, height: 5, depth: 0.24 },
@@ -730,11 +935,67 @@ export class BabylonGameSession {
     container: AssetContainer,
     config: ModelConfig,
   ): void {
-    if (!config.bodyMaterials || !config.color) return;
-    const color = Color3.FromHexString(config.color);
+    if (config.bodyMaterials && config.color) {
+      const color = Color3.FromHexString(config.color);
+      for (const material of container.materials) {
+        if (config.bodyMaterials.includes(material.name))
+          setMaterialColor(material, color);
+      }
+    }
+    this.applyVehicleLightGlow(container, config);
+    if (BUILDING_KEYS.includes(config.key as BuildingModelKey))
+      this.applyNightWindowGlow(container);
+  }
+
+  private applyVehicleLightGlow(
+    container: AssetContainer,
+    config: ModelConfig,
+  ): void {
+    if (!config.headlightMaterials && !config.taillightMaterials) return;
+    const headlight = new Color3(0.5, 0.46, 0.3);
+    const taillight = new Color3(0.32, 0.03, 0.02);
     for (const material of container.materials) {
-      if (config.bodyMaterials.includes(material.name))
-        setMaterialColor(material, color);
+      let color: Color3 | null = null;
+      if (config.headlightMaterials?.includes(material.name)) color = headlight;
+      else if (config.taillightMaterials?.includes(material.name))
+        color = taillight;
+      if (!color) continue;
+      if (material instanceof PBRMaterial) {
+        material.emissiveColor = color.clone();
+        material.emissiveIntensity = 1;
+      } else if (material instanceof StandardMaterial) {
+        material.emissiveColor = color.clone();
+      }
+    }
+  }
+
+  private applyNightWindowGlow(container: AssetContainer): void {
+    const warm = new Color3(0.95, 0.6, 0.29);
+    const darkPane = new Color3(0.05, 0.045, 0.04);
+    for (const material of container.materials) {
+      if (!isNightWindowMaterialName(material.name)) continue;
+      if (material instanceof PBRMaterial) {
+        const authored =
+          material.emissiveTexture !== null ||
+          material.emissiveColor.r +
+            material.emissiveColor.g +
+            material.emissiveColor.b >
+            0.001;
+        if (authored) continue;
+        material.albedoColor = darkPane.clone();
+        material.emissiveColor = warm.clone();
+        material.emissiveIntensity = 0.42;
+      } else if (material instanceof StandardMaterial) {
+        const authored =
+          material.emissiveTexture !== null ||
+          material.emissiveColor.r +
+            material.emissiveColor.g +
+            material.emissiveColor.b >
+            0.001;
+        if (authored) continue;
+        material.diffuseColor = darkPane.clone();
+        material.emissiveColor = warm.scale(0.42);
+      }
     }
   }
 
@@ -810,8 +1071,8 @@ export class BabylonGameSession {
       this.shadowMaterialCache = makeMaterial(
         this.scene,
         'blob-shadow-mat',
-        '#13283a',
-        0.22,
+        '#080f1b',
+        0.28,
       );
       this.shadowMaterialCache.disableLighting = true;
       this.shadowMaterialCache.freeze();
@@ -973,6 +1234,7 @@ export class BabylonGameSession {
     this.updateTraffic(interpolatedPlayerZ, alpha);
     this.updateRoad(interpolatedPlayerZ);
     this.updateScenery(interpolatedPlayerZ);
+    this.updateStreetlights(interpolatedPlayerZ);
     this.updateFurniture(interpolatedPlayerZ);
 
     this.cameraX += (interpolatedX * 0.28 - this.cameraX) * 0.055;
@@ -1092,7 +1354,7 @@ export class BabylonGameSession {
       writeVertex(
         tile.shoulders.positions,
         shoulderVertex,
-        leftEdgeM - SIDEWALK_WIDTH_M,
+        leftEdgeM - ROAD_SIDEWALK_WIDTH_M,
         localZ,
       );
       writeVertex(
@@ -1110,7 +1372,7 @@ export class BabylonGameSession {
       writeVertex(
         tile.shoulders.positions,
         shoulderVertex + 3,
-        rightEdgeM + SIDEWALK_WIDTH_M,
+        rightEdgeM + ROAD_SIDEWALK_WIDTH_M,
         localZ,
       );
     }
@@ -1212,6 +1474,31 @@ export class BabylonGameSession {
         entry.holder.position.z = zM - playerZ;
         setVisible(entry, isRoadsideBuildingVisible(zM, playerZ));
       }
+    }
+  }
+
+  private updateStreetlights(playerZ: number): void {
+    const firstStation = firstStreetlightStation(playerZ);
+    for (let offset = 0; offset < STREETLIGHT_POOL_SIZE; offset += 1) {
+      const absoluteStation = firstStation + offset;
+      const entry = this.streetlightPool[streetlightPoolSlot(absoluteStation)];
+      // The even-sized pool preserves station parity, so a recycled root keeps
+      // the same kerb-facing arm and pool orientation for its whole lifetime.
+      if (entry.side !== streetlightSide(absoluteStation)) {
+        entry.root.setEnabled(false);
+        continue;
+      }
+      if (entry.absoluteStation !== absoluteStation) {
+        const placement = streetlightPlacement(
+          this.simulation.seed,
+          absoluteStation,
+        );
+        entry.absoluteStation = absoluteStation;
+        entry.root.position.x = placement.xM;
+      }
+      const zM = absoluteStation * STREETLIGHT_SPACING_M;
+      entry.root.position.z = zM - playerZ;
+      entry.root.setEnabled(isStreetlightVisible(zM, playerZ));
     }
   }
 

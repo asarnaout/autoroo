@@ -36,7 +36,7 @@
     ui-rounded, 'Arial Rounded MT Bold', 'Trebuchet MS', system-ui, sans-serif;
   --font-autoroo-display:
     Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
-  --background: #6b9bbc;
+  --background: #0e1a33;
   --foreground: #13283a;
   --card: #fffaf0;
   --card-foreground: #13283a;
@@ -84,7 +84,7 @@ button {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background: #6b9bbc;
+  background: #0e1a33;
   isolation: isolate;
   user-select: none;
 }
@@ -105,7 +105,7 @@ button {
   inset: 0;
   display: grid;
   place-items: center;
-  background: #6b9bbc;
+  background: linear-gradient(180deg, #0e1a33 0%, #293d61 100%);
   color: white;
   font-weight: 950;
   letter-spacing: 0.04em;

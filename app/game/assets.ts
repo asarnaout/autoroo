@@ -30,6 +30,8 @@ export interface ModelConfig {
   readonly groundY: number;
   readonly bodyMaterials?: readonly string[];
   readonly color?: string;
+  readonly headlightMaterials?: readonly string[];
+  readonly taillightMaterials?: readonly string[];
 }
 
 export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
@@ -40,6 +42,8 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     groundY: 0,
     bodyMaterials: ['White'],
     color: PLAYER_CAR_COLOR,
+    headlightMaterials: ['Headlights'],
+    taillightMaterials: ['TailLights'],
   },
   sedan: {
     key: 'sedan',
@@ -48,6 +52,8 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     groundY: 0,
     bodyMaterials: ['Blue'],
     color: '#f3bd3d',
+    headlightMaterials: ['Headlights'],
+    taillightMaterials: ['TailLights'],
   },
   suv: {
     key: 'suv',
@@ -56,6 +62,8 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     groundY: 0,
     bodyMaterials: ['White'],
     color: '#2e9b91',
+    headlightMaterials: ['Headlights'],
+    taillightMaterials: ['TailLights'],
   },
   bus: {
     key: 'bus',
@@ -64,6 +72,8 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     groundY: 0,
     bodyMaterials: ['039BE5'],
     color: '#7656d6',
+    headlightMaterials: ['FF9800'],
+    taillightMaterials: ['F44336'],
   },
   towerA: { key: 'towerA', scale: 13, yaw: 0, groundY: 0 },
   towerB: { key: 'towerB', scale: 12, yaw: 0, groundY: 0 },
@@ -89,7 +99,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited unchanged; the White body material is recoloured at runtime for Autoroo.',
+      'Inherited unchanged; the White body material is recoloured and the named head/tail lenses are made emissive at runtime for Autoroo.',
   },
   {
     file: MODEL_URLS.sedan,
@@ -100,7 +110,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited unchanged; the Blue body material is recoloured at runtime for Autoroo.',
+      'Inherited unchanged; the Blue body material is recoloured and the named head/tail lenses are made emissive at runtime for Autoroo.',
   },
   {
     file: MODEL_URLS.suv,
@@ -111,7 +121,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited unchanged; the White body material is recoloured at runtime for Autoroo.',
+      'Inherited unchanged; the White body material is recoloured and the named head/tail lenses are made emissive at runtime for Autoroo.',
   },
   {
     file: MODEL_URLS.bus,
@@ -122,7 +132,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC-BY 3.0',
     licenseUrl: 'https://creativecommons.org/licenses/by/3.0/',
     modificationNotes:
-      'Inherited unchanged; material 039BE5 is recoloured at runtime for Autoroo.',
+      'Inherited unchanged; material 039BE5 is recoloured and the mapped front/rear lenses are made emissive at runtime for Autoroo.',
   },
   {
     file: MODEL_URLS.towerA,

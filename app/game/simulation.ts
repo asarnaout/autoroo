@@ -2117,9 +2117,9 @@ export class AutorooSimulation {
       this.boosterEffect('boing', 'BOING! Physics has left the chat.', 0.8);
       this.emitEvent({ type: 'double-jump' });
     }
+    const wasRocketFlying = this.boosters.rocket !== null;
     const enhancedFlight =
-      this.boosters.rocket !== null ||
-      this.boosters.doubleJumpOriginYM !== null;
+      wasRocketFlying || this.boosters.doubleJumpOriginYM !== null;
     const previousLane = this.player.lane;
     const outcome = stepWorld(this.world, input, this.boosters);
     if ((outcome & WORLD_JUMPED) !== 0) this.emitEvent({ type: 'jump' });
@@ -2176,7 +2176,9 @@ export class AutorooSimulation {
       this.fillAhead();
       this.tryRevealGate();
     }
-    this.collectBoosters();
+    // Touchdown clears the rocket above, but its final swept segment is still
+    // part of Yeet and must not collect pickups either.
+    if (!wasRocketFlying) this.collectBoosters();
     this.fillBoosters();
   }
 
@@ -2216,10 +2218,10 @@ export class AutorooSimulation {
     // Keep generation bounded even if a harness relocates the player.
     this.nextBoosterStation = Math.max(
       this.nextBoosterStation,
-      Math.floor((this.player.absoluteZM - 90) / BOOSTER_SPACING_M),
+      Math.floor(this.player.absoluteZM / BOOSTER_SPACING_M) - 1,
     );
     while (
-      90 + this.nextBoosterStation * BOOSTER_SPACING_M <
+      (this.nextBoosterStation + 1) * BOOSTER_SPACING_M <
       this.player.absoluteZM + TRAFFIC_RENDER_AHEAD_M
     ) {
       const pickup = boosterAtStation(this.seed, this.nextBoosterStation++);

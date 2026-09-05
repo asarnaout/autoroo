@@ -14,8 +14,16 @@ import type {
 import { laneMaskAt, isSteadyRoadRange } from './generator';
 import { hashParts, hashUnit } from './random';
 
-export const BOOSTER_SPACING_M = 90;
+export const BOOSTER_SPACING_M = 240;
 export const BOOSTER_POOL_SIZE = 6;
+const BOOSTER_CYCLE: readonly BoosterKind[] = [
+  'boing',
+  'shield',
+  'boing',
+  'rocket',
+  'boing',
+  'shield',
+];
 export const DOUBLE_JUMP_IMPULSE_MPS = 28;
 export const DOUBLE_JUMP_GRAVITY_MPS2 = 34;
 export const ROCKET_DURATION_S = 4;
@@ -62,23 +70,18 @@ export function makeBoosterState(): BoosterState {
   };
 }
 
-/** Eight springs, three bubbles and one rocket per seeded 1,080 m block. */
+/** Three springs, two bubbles and one rocket per seeded 1,440 m block. */
 export function boosterAtStation(
   seed: number,
   station: number,
 ): BoosterPickup | null {
-  const block = Math.floor(station / 12);
-  const slot = (station + (hashParts(seed, block, 811) % 12)) % 12;
-  const kind: BoosterKind =
-    station === 0
-      ? 'boing'
-      : slot === 11
-        ? 'rocket'
-        : slot >= 8
-          ? 'shield'
-          : 'boing';
+  const block = Math.floor(station / BOOSTER_CYCLE.length);
+  const slot =
+    (station + (hashParts(seed, block, 811) % BOOSTER_CYCLE.length)) %
+    BOOSTER_CYCLE.length;
+  const kind = BOOSTER_CYCLE[slot];
   const absoluteZM =
-    90 + station * BOOSTER_SPACING_M + hashUnit(seed, station, 821) * 14;
+    (station + 1) * BOOSTER_SPACING_M + hashUnit(seed, station, 821) * 14;
   // Never lure the player into a closing lane or a taper.
   if (!isSteadyRoadRange(seed, absoluteZM - 20, absoluteZM + 20)) return null;
   const lanes = activeLanes(laneMaskAt(seed, absoluteZM));
@@ -93,7 +96,7 @@ export function boosterAtStation(
   };
 }
 
-/** Intersect all three axes over the SAME swept interval, including lane flips. */
+/** Pass through or above a pickup during the SAME lateral/forward interval. */
 export function collectsBooster(
   player: Readonly<PlayerState>,
   pickup: BoosterPickup,
@@ -103,7 +106,6 @@ export function collectsBooster(
   const axes = [
     [player.previousZM, player.absoluteZM, pickup.absoluteZM, 2.1],
     [player.previousXM, player.xM, LANE_X[pickup.lane], 0.85],
-    [player.previousYM + 0.7, player.yM + 0.7, pickup.yM, 0.85],
   ];
   for (const [start, end, centre, radius] of axes) {
     const delta = end - start;
@@ -117,7 +119,17 @@ export function collectsBooster(
     exit = Math.min(exit, Math.max(a, b));
     if (entry > exit) return false;
   }
-  return true;
+  // A jump over a pickup counts, but driving underneath a floating pickup
+  // does not. Intersect this lower height bound with the X/Z overlap so a
+  // late jump or a lane change after passing cannot collect it retroactively.
+  const startYM = player.previousYM + 0.7;
+  const deltaYM = player.yM - player.previousYM;
+  const minimumYM = pickup.yM - 0.85;
+  if (Math.abs(deltaYM) < 1e-9) return startYM >= minimumYM;
+  const crossing = (minimumYM - startYM) / deltaYM;
+  if (deltaYM > 0) entry = Math.max(entry, crossing);
+  else exit = Math.min(exit, crossing);
+  return entry <= exit;
 }
 
 /** Handles forward/vertical flight; lateral movement uses normal lane changes. */

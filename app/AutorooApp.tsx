@@ -643,8 +643,8 @@ function BoostersDialog() {
         <DialogHeader>
           <DialogTitle>Roadside weirdos</DialogTitle>
           <DialogDescription>
-            Spot a floating buddy? Steer over to collect it. The bubbles and
-            rockets need a well-timed jump, too.
+            Steer into a booster or jump over it in the same lane to collect it.
+            Yeet flights skip pickups.
           </DialogDescription>
         </DialogHeader>
         {(['boing', 'shield', 'rocket'] as const).map((kind) => {

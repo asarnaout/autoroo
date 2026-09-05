@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   BOOSTER_POOL_SIZE,
+  BOOSTER_SPACING_M,
   DOUBLE_JUMP_IMPULSE_MPS,
   ROCKET_BONUS,
   ROCKET_DISTANCE_M,
@@ -60,10 +61,13 @@ describe('collectible generation and collection', () => {
   it('repeats deterministically with ordered rarity and manoeuvre targets on stable road', () => {
     const counts = { boing: 0, shield: 0, rocket: 0 };
     for (let seed = 0; seed < 20; seed += 1) {
+      let previousPickupM = 0;
       for (let station = 0; station < 240; station += 1) {
         const item = boosterAtStation(seed, station);
         expect(item).toEqual(boosterAtStation(seed, station));
         if (!item) continue;
+        expect(item.absoluteZM - previousPickupM).toBeGreaterThan(225);
+        previousPickupM = item.absoluteZM;
         counts[item.kind] += 1;
         expect(
           isSteadyRoadRange(seed, item.absoluteZM - 20, item.absoluteZM + 20),
@@ -72,9 +76,14 @@ describe('collectible generation and collection', () => {
         expect(item.lane).toBe(station % 2 === 0 ? lanes.at(-1) : lanes[0]);
       }
     }
-    expect(counts.boing).toBeGreaterThan(counts.shield * 2);
-    expect(counts.shield).toBeGreaterThan(counts.rocket * 2);
+    expect(counts.boing).toBeGreaterThan(counts.shield);
+    expect(counts.boing).toBeLessThan(counts.shield * 2);
+    expect(counts.shield).toBeGreaterThan(counts.rocket * 1.5);
     expect(counts.rocket).toBeGreaterThan(100);
+    const sampledKm = (20 * 240 * BOOSTER_SPACING_M) / 1000;
+    expect(counts.boing / sampledKm).toBeLessThan(2.1);
+    expect(counts.shield / sampledKm).toBeLessThan(1.5);
+    expect(counts.rocket / sampledKm).toBeLessThan(0.8);
   });
 
   it('requires lane alignment, and a jump for bubbles and rockets', () => {
@@ -118,6 +127,103 @@ describe('collectible generation and collection', () => {
       ),
     ).toBe(true);
   });
+
+  it.each(['boing', 'shield', 'rocket'] as const)(
+    'collects a %s passed above while requiring the same lane and forward overlap',
+    (kind) => {
+      const player = {
+        ...emptyRun().snapshot().player,
+        airborne: true,
+        previousYM: 12,
+        yM: 10,
+        previousZM: -5,
+        absoluteZM: 5,
+      };
+      const item = pickup(
+        kind,
+        0,
+        kind === 'boing' ? 1.2 : kind === 'shield' ? 3.4 : 4.8,
+      );
+      expect(collectsBooster(player, item)).toBe(true);
+      expect(collectsBooster(player, { ...item, lane: 2 })).toBe(false);
+      expect(collectsBooster(player, { ...item, absoluteZM: 10 })).toBe(false);
+    },
+  );
+
+  it('requires the jump height and horizontal passage to overlap in time', () => {
+    const player = emptyRun().snapshot().player;
+    const item = pickup('rocket', 0, 4.8);
+    expect(
+      collectsBooster(
+        {
+          ...player,
+          airborne: true,
+          previousZM: 0,
+          absoluteZM: 20,
+          previousYM: 0,
+          yM: 10,
+        },
+        item,
+      ),
+    ).toBe(false);
+    expect(
+      collectsBooster(
+        { ...player, previousZM: -20, absoluteZM: 0, previousYM: 10, yM: 0 },
+        item,
+      ),
+    ).toBe(false);
+    expect(
+      collectsBooster(
+        {
+          ...player,
+          airborne: true,
+          previousZM: -10,
+          absoluteZM: 10,
+          previousYM: 0,
+          yM: 10,
+        },
+        item,
+      ),
+    ).toBe(true);
+  });
+
+  it.each(['boing', 'shield', 'rocket'] as const)(
+    'collects a %s exactly once when normal or double jumps pass over it',
+    (kind) => {
+      for (const doubleJump of [false, true]) {
+        const run = emptyRun();
+        run.__debugSetPlayer({ speedMps: MAX_SPEED_MPS });
+        clearTick(run, tap);
+        if (doubleJump) {
+          run.__debugSetBoosters({ doubleJumpReady: true });
+          clearTick(run, tap);
+        }
+        for (let i = 0; i < 24; i += 1) clearTick(run);
+        run.drainEvents();
+        const item = pickup(
+          kind,
+          run.renderPlayer.absoluteZM + MAX_SPEED_MPS * FIXED_DT,
+          kind === 'boing' ? 1.2 : kind === 'shield' ? 3.4 : 4.8,
+        );
+        expect(run.renderPlayer.yM + 0.7).toBeGreaterThan(item.yM);
+        run.__debugReplacePickups([item]);
+        clearTick(run);
+        expect(
+          run.renderPickups.some((candidate) => candidate.id === item.id),
+        ).toBe(false);
+        const boosts = run.renderBoosters;
+        if (kind === 'boing') expect(boosts.doubleJumpReady).toBe(true);
+        if (kind === 'shield') expect(boosts.shieldReady).toBe(true);
+        if (kind === 'rocket') expect(boosts.rocket).not.toBeNull();
+        clearTick(run);
+        expect(
+          run
+            .drainEvents()
+            .filter((event) => event.type === 'pickup' && event.kind === kind),
+        ).toHaveLength(1);
+      }
+    },
+  );
 
   it('collects once, caps inventory at one, and restart clears every ability', () => {
     const run = emptyRun();
@@ -655,6 +761,45 @@ describe('Yeet Rocket', () => {
       run.drainEvents().filter((event) => event.type === 'rocket-land'),
     ).toHaveLength(1);
   });
+
+  it.each(['boing', 'shield', 'rocket'] as const)(
+    'skips %s pickups throughout Yeet, including its touchdown segment',
+    (kind) => {
+      const run = launchRocket();
+      const flight = { ...run.renderBoosters.rocket! };
+      run.drainEvents();
+      for (let tick = 1; tick <= flightTicks; tick += 1) {
+        const nextZM =
+          flight.startZM + (ROCKET_DISTANCE_M * tick) / flightTicks;
+        // The final pickup intersects only the flight's final swept segment,
+        // so collection on the next grounded tick cannot hide a Yeet pickup.
+        const item = pickup(
+          kind,
+          tick === flightTicks ? flight.landingZM - 2.5 : nextZM,
+        );
+        run.__debugReplacePickups([item]);
+        clearTick(run);
+        expect(
+          run.renderPickups.some((candidate) => candidate.id === item.id),
+        ).toBe(true);
+      }
+      expect(run.renderBoosters).toMatchObject({
+        doubleJumpReady: false,
+        shieldReady: false,
+        rocket: null,
+      });
+      expect(
+        run.drainEvents().filter((event) => event.type === 'pickup'),
+      ).toHaveLength(0);
+      // Grounded pickup contact works again immediately after the flight.
+      run.__debugReplacePickups([pickup('boing', run.renderPlayer.absoluteZM)]);
+      clearTick(run);
+      expect(run.renderBoosters.doubleJumpReady).toBe(true);
+      expect(
+        run.drainEvents().filter((event) => event.type === 'pickup'),
+      ).toHaveLength(1);
+    },
+  );
 
   it('replays booster state identically at 30, 60 and 144 Hz', () => {
     const run = (hz: number) => {

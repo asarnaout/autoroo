@@ -433,11 +433,7 @@ export function AutorooApp() {
       )}
 
       {isPlaying && touchDriving && (
-        <TouchControls
-          onPress={onControlPress}
-          onRelease={onControlRelease}
-          hasMoved={snapshot.player.maxForwardM > 6}
-        />
+        <TouchControls onPress={onControlPress} onRelease={onControlRelease} />
       )}
 
       {isOnStartScreen && (

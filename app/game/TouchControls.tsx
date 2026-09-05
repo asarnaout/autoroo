@@ -91,19 +91,10 @@ function TouchButton({
   );
 }
 
-export function TouchControls({
-  onPress,
-  onRelease,
-  hasMoved,
-}: ControlCallbacks & {
-  readonly hasMoved: boolean;
-}) {
+export function TouchControls({ onPress, onRelease }: ControlCallbacks) {
   const callbacks = { onPress, onRelease };
   return (
     <fieldset className="touch-controls" aria-label="Driving controls">
-      <p className="touch-drive-hint">
-        {hasMoved ? 'AUTO-DRIVE ON' : 'AUTO-DRIVE ON · LET’S GO!'}
-      </p>
       <div className="touch-steering">
         <TouchButton
           control="left"

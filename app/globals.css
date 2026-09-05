@@ -526,19 +526,6 @@ button {
   pointer-events: none;
   -webkit-touch-callout: none;
 }
-.touch-drive-hint {
-  position: absolute;
-  top: 5px;
-  left: 0;
-  right: 0;
-  margin: 0;
-  color: #c7f2ce;
-  text-align: center;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-shadow: 0 2px 4px #071123;
-}
 .touch-steering {
   display: grid;
   grid-template-columns: repeat(2, 64px);
@@ -639,10 +626,6 @@ button {
   .touch-controls {
     height: calc(142px + env(safe-area-inset-bottom));
     padding-top: 8px;
-  }
-  .touch-drive-hint {
-    top: auto;
-    bottom: max(16px, env(safe-area-inset-bottom));
   }
   .touch-steering {
     grid-template-columns: 60px 60px;

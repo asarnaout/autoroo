@@ -1,6 +1,7 @@
 import { MUSIC_URLS } from './assets';
 import { MAX_SPEED_MPS } from './constants';
 import type { GameEvent } from './contracts';
+import { playCartoonCrash } from './crashSound';
 
 export class AutorooAudio {
   private context: AudioContext | null = null;
@@ -11,6 +12,7 @@ export class AutorooAudio {
   private music: HTMLAudioElement | null = null;
   private musicRequested = false;
   private muted = false;
+  private cancelCrashSound: (() => void) | null = null;
 
   constructor(
     private readonly createMusicElement: (
@@ -32,6 +34,7 @@ export class AutorooAudio {
 
   setMuted(muted: boolean): void {
     this.muted = muted;
+    if (muted) this.stopCrashSound();
     if (this.master && this.context) {
       this.master.gain.setTargetAtTime(
         muted ? 0 : 0.4,
@@ -44,6 +47,7 @@ export class AutorooAudio {
   }
 
   setGameplayActive(active: boolean, restart = false): void {
+    if (restart) this.stopCrashSound();
     const changed = this.musicRequested !== active;
     this.musicRequested = active;
     if (!active) {
@@ -109,8 +113,8 @@ export class AutorooAudio {
         this.chirp(225, 145, 0.075, 'sine', 0.03, 0.055);
         break;
       case 'crash':
-        this.noiseBurst();
-        this.chirp(120, 38, 0.48, 'sawtooth', 0.16);
+        this.stopCrashSound();
+        this.cancelCrashSound = playCartoonCrash(this.context, this.master);
         break;
       case 'warning':
         this.chirp(420, 330, 0.13, 'triangle', 0.04);
@@ -126,6 +130,7 @@ export class AutorooAudio {
   }
 
   dispose(): void {
+    this.stopCrashSound();
     this.musicRequested = false;
     this.music?.pause();
     this.music?.removeAttribute('src');
@@ -241,27 +246,8 @@ export class AutorooAudio {
     this.chirp(105, 55, 0.2, 'sawtooth', 0.075, 0.08);
   }
 
-  private noiseBurst(): void {
-    if (!this.context || !this.master) return;
-    const durationS = 0.32;
-    const buffer = this.context.createBuffer(
-      1,
-      Math.floor(this.context.sampleRate * durationS),
-      this.context.sampleRate,
-    );
-    const samples = buffer.getChannelData(0);
-    for (let index = 0; index < samples.length; index += 1) {
-      const envelope = 1 - index / samples.length;
-      samples[index] = (Math.random() * 2 - 1) * envelope;
-    }
-    const source = this.context.createBufferSource();
-    const filter = this.context.createBiquadFilter();
-    const gain = this.context.createGain();
-    filter.type = 'lowpass';
-    filter.frequency.value = 680;
-    gain.gain.value = 0.2;
-    source.buffer = buffer;
-    source.connect(filter).connect(gain).connect(this.master);
-    source.start();
+  stopCrashSound(): void {
+    this.cancelCrashSound?.();
+    this.cancelCrashSound = null;
   }
 }

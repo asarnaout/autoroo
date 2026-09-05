@@ -118,6 +118,7 @@ export function AutorooApp() {
     number | null
   >(null);
   const [touchDriving, setTouchDriving] = useState(false);
+  const [crashAnimating, setCrashAnimating] = useState(false);
 
   useEffect(() => {
     const query = window.matchMedia(TOUCH_CONTROLS_QUERY);
@@ -168,6 +169,7 @@ export function AutorooApp() {
   const onSnapshot = useCallback(
     (next: RunSnapshot) => {
       const previousPhase = snapshotRef.current.phase;
+      if (next.phase !== 'game-over') setCrashAnimating(false);
       if (next.tick < snapshotRef.current.tick || next.phase === 'game-over')
         setDoubleJumpHintUntilTick(null);
       snapshotRef.current = next;
@@ -185,6 +187,7 @@ export function AutorooApp() {
   );
 
   const onEvent = useCallback((event: GameEvent) => {
+    if (event.type === 'crash') setCrashAnimating(true);
     if (event.type === 'pickup' && event.kind === 'boing') {
       // Consume the actual pickup event: a charge can be spent between HUD
       // snapshots. Initialize storage lazily, and keep this callback stable.
@@ -206,6 +209,10 @@ export function AutorooApp() {
   }, []);
 
   const onReady = useCallback(() => setSceneReady(true), []);
+  const onCrashAnimationComplete = useCallback(
+    () => setCrashAnimating(false),
+    [],
+  );
   const onLoadProgress = useCallback(
     (progress: number) => setLoadProgress(progress),
     [],
@@ -357,6 +364,7 @@ export function AutorooApp() {
         onLoadProgress={onLoadProgress}
         onSnapshot={onSnapshot}
         onEvent={onEvent}
+        onCrashAnimationComplete={onCrashAnimationComplete}
       />
 
       {!isOnStartScreen && (
@@ -552,7 +560,7 @@ export function AutorooApp() {
         </section>
       )}
 
-      {snapshot.phase === 'game-over' && (
+      {snapshot.phase === 'game-over' && !crashAnimating && (
         <section
           className="overlay-card crash-card"
           aria-labelledby="crash-title"

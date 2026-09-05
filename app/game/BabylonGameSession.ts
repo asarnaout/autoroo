@@ -87,12 +87,15 @@ import { AutorooSimulation } from './simulation';
 import { shouldPublishRunSnapshot } from './snapshotPublication';
 import { AdaptiveRenderQuality } from './renderQuality';
 import { chaseCameraFraming } from './cameraFraming';
+import { CrashAnimation } from './crashAnimation';
+import { makeBoosterState } from './boosters';
 
 interface SessionCallbacks {
   readonly onReady: () => void;
   readonly onLoadProgress: (progress: number) => void;
   readonly onSnapshot: (snapshot: RunSnapshot) => void;
   readonly onEvent: (event: GameEvent) => void;
+  readonly onCrashAnimationComplete: () => void;
 }
 
 interface VisualEntry {
@@ -231,6 +234,8 @@ export class BabylonGameSession {
   private viewportHeight = 1;
   private resizeObserver: ResizeObserver | null = null;
   private readonly target = new Vector3();
+  private readonly crashAnimation = new CrashAnimation();
+  private readonly inactiveBoosterVisuals = makeBoosterState();
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
     // Consume the menu shortcut until release, including repeats after starting.
@@ -288,6 +293,7 @@ export class BabylonGameSession {
   private readonly onBlur = () => {
     this.startSpaceHeld = false;
     this.input.clear();
+    this.audio.stopCrashSound();
     if (this.simulation.phaseName === 'running') this.setPaused(true);
   };
 
@@ -399,6 +405,7 @@ export class BabylonGameSession {
   }
 
   start(): void {
+    this.crashAnimation.reset();
     this.simulation.start();
     this.input.clear();
     this.accumulatorS = 0;
@@ -409,6 +416,7 @@ export class BabylonGameSession {
   }
 
   restart(): void {
+    this.crashAnimation.reset();
     this.simulation.restart();
     this.input.clear();
     this.accumulatorS = 0;
@@ -1302,10 +1310,38 @@ export class BabylonGameSession {
     }
   }
 
+  private beginCrash(): void {
+    this.input.clear();
+    this.updateVisuals(1);
+    const entry = this.playerVisual;
+    const holder = entry?.holder ?? this.fallbackPlayer.holder;
+    const pivot = entry
+      ? (entry.animationPivot ?? entry.holder)
+      : this.fallbackPlayer.animationPivot;
+    this.crashAnimation.start(
+      {
+        xM: holder.position.x,
+        yM: holder.position.y - (entry?.groundY ?? 0),
+        zM: 0,
+        pitch: pivot.rotation.x,
+        yaw: pivot.rotation.y,
+        roll: pivot.rotation.z,
+        scaleX: pivot.scaling.x,
+        scaleY: pivot.scaling.y,
+        scaleZ: pivot.scaling.z,
+      },
+      holder.position.x > 0 ? -1 : 1,
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    );
+  }
+
   private frame(): void {
     if (this.disposed) return;
     const rawDeltaMs = this.engine.getDeltaTime();
     const deltaMs = Math.min(100, rawDeltaMs);
+    const crashFinished = this.crashAnimation.advance(
+      document.visibilityState === 'visible' ? deltaMs / 1000 : 0,
+    );
     if (this.simulation.phaseName === 'running') {
       this.accumulatorS = Math.min(0.25, this.accumulatorS + deltaMs / 1000);
       let steps = 0;
@@ -1318,6 +1354,7 @@ export class BabylonGameSession {
         this.accumulatorS -= FIXED_DT;
         steps += 1;
         for (const event of this.simulation.drainEvents()) {
+          if (event.type === 'crash') this.beginCrash();
           this.audio.play(event);
           this.callbacks.onEvent(event);
         }
@@ -1331,6 +1368,7 @@ export class BabylonGameSession {
       this.simulation.phaseName === 'running' && !this.muted,
     );
     this.scene.render();
+    if (crashFinished) this.callbacks.onCrashAnimationComplete();
     if (
       this.renderQuality.sample(
         rawDeltaMs,
@@ -1363,6 +1401,8 @@ export class BabylonGameSession {
   }
 
   private updateVisuals(alpha: number): void {
+    // The last simulation tick is frozen; the presentation has its own clock.
+    if (this.simulation.phaseName === 'game-over') alpha = 1;
     const player = this.simulation.renderPlayer;
     const interpolatedX =
       player.previousXM + (player.xM - player.previousXM) * alpha;
@@ -1382,42 +1422,39 @@ export class BabylonGameSession {
       boingProgress * boingProgress * (3 - 2 * boingProgress) * Math.PI * 2;
     const stretch =
       1 + Math.sin(boingProgress * Math.PI * 4) * (1 - boingProgress) * 0.28;
+    const crashPose = this.crashAnimation.pose();
+    const carX = crashPose?.xM ?? interpolatedX;
+    const carY = crashPose?.yM ?? visualY;
+    const carZ = crashPose?.zM ?? 0;
+    const pitch = crashPose?.pitch ?? jumpPitch - boingTurn;
+    const yaw = crashPose?.yaw ?? 0;
+    const roll = crashPose?.roll ?? lanePose.rollRad;
+    const scaleX = crashPose?.scaleX ?? 1 / Math.sqrt(stretch);
+    const scaleY = crashPose?.scaleY ?? stretch;
+    const scaleZ = crashPose?.scaleZ ?? 1 / Math.sqrt(stretch);
     const playerEntry = this.playerVisual;
     if (playerEntry) {
-      playerEntry.holder.position.set(
-        interpolatedX,
-        playerEntry.groundY + visualY,
-        0,
-      );
+      playerEntry.holder.position.set(carX, playerEntry.groundY + carY, carZ);
       const animationPivot = playerEntry.animationPivot ?? playerEntry.holder;
-      animationPivot.rotation.x = jumpPitch - boingTurn;
-      animationPivot.rotation.z = lanePose.rollRad;
-      animationPivot.scaling.set(
-        1 / Math.sqrt(stretch),
-        stretch,
-        1 / Math.sqrt(stretch),
-      );
+      animationPivot.rotation.set(pitch, yaw, roll);
+      animationPivot.scaling.set(scaleX, scaleY, scaleZ);
       if (playerEntry.shadow) {
-        playerEntry.shadow.position.set(interpolatedX, 0.05, 0);
-        playerEntry.shadow.scaling.z = Math.max(0.45, 1 - visualY * 0.08);
-        playerEntry.shadow.visibility = Math.max(0.08, 0.22 - visualY * 0.025);
+        playerEntry.shadow.position.set(carX, 0.05, carZ);
+        playerEntry.shadow.rotation.y = yaw;
+        playerEntry.shadow.scaling.z = Math.max(0.45, 1 - carY * 0.08);
+        playerEntry.shadow.visibility = Math.max(0.08, 0.22 - carY * 0.025);
       }
     } else {
-      this.fallbackPlayer.holder.position.set(interpolatedX, visualY, 0);
-      this.fallbackPlayer.animationPivot.rotation.x = jumpPitch - boingTurn;
-      this.fallbackPlayer.animationPivot.rotation.z = lanePose.rollRad;
-      this.fallbackPlayer.animationPivot.scaling.set(
-        1 / Math.sqrt(stretch),
-        stretch,
-        1 / Math.sqrt(stretch),
-      );
+      this.fallbackPlayer.holder.position.set(carX, carY, carZ);
+      this.fallbackPlayer.animationPivot.rotation.set(pitch, yaw, roll);
+      this.fallbackPlayer.animationPivot.scaling.set(scaleX, scaleY, scaleZ);
     }
     this.boosterVisuals.update(
       this.simulation.renderPickups,
-      boosts,
+      crashPose ? this.inactiveBoosterVisuals : boosts,
       interpolatedPlayerZ,
-      interpolatedX,
-      visualY,
+      carX,
+      carY,
       (this.simulation.renderTick + alpha) * FIXED_DT,
     );
     this.updateTraffic(interpolatedPlayerZ, alpha);

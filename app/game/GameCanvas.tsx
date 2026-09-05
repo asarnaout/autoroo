@@ -23,11 +23,19 @@ export interface GameCanvasProps {
   readonly onLoadProgress: (progress: number) => void;
   readonly onSnapshot: (snapshot: RunSnapshot) => void;
   readonly onEvent: (event: GameEvent) => void;
+  readonly onCrashAnimationComplete: () => void;
 }
 
 const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
   function GameCanvas(
-    { muted, onReady, onLoadProgress, onSnapshot, onEvent },
+    {
+      muted,
+      onReady,
+      onLoadProgress,
+      onSnapshot,
+      onEvent,
+      onCrashAnimationComplete,
+    },
     ref,
   ) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -86,6 +94,7 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         onLoadProgress,
         onSnapshot,
         onEvent,
+        onCrashAnimationComplete,
       });
       sessionRef.current = session;
       const pending = pendingActionRef.current;
@@ -96,7 +105,13 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         sessionRef.current = null;
         session.dispose();
       };
-    }, [onEvent, onLoadProgress, onReady, onSnapshot]);
+    }, [
+      onEvent,
+      onLoadProgress,
+      onReady,
+      onSnapshot,
+      onCrashAnimationComplete,
+    ]);
 
     useEffect(() => {
       sessionRef.current?.setMuted(muted);

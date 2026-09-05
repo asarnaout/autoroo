@@ -1,0 +1,24 @@
+{
+  "mode": "built-in image_gen",
+  "requests": 2,
+  "retries": 0,
+  "alpha_validation": "FAILED: both originals have RGB pixels and a baked checkerboard; neither contains an alpha channel",
+  "assets": [
+    {
+      "path": "/Users/ahmedarnaout/Documents/ChatGPT/Autoroo/output/production-assets/concept-a-originals/autoroo-logo.png",
+      "source": "/Users/ahmedarnaout/.codex/generated_images/01a06edd-fae4-79d0-b057-9b170061770f/exec-b8a54b1a-b749-4900-9596-bd9a800bec8c.png",
+      "width": 2059,
+      "height": 764,
+      "mode": "RGB",
+      "alpha_channel": false
+    },
+    {
+      "path": "/Users/ahmedarnaout/Documents/ChatGPT/Autoroo/output/production-assets/concept-a-originals/autoroo-stunt.png",
+      "source": "/Users/ahmedarnaout/.codex/generated_images/01a06edd-fae4-79d0-b057-9b170061770f/exec-1b38785a-31ff-454e-a614-672830579ea2.png",
+      "width": 1342,
+      "height": 1172,
+      "mode": "RGB",
+      "alpha_channel": false
+    }
+  ]
+}

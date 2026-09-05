@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import {
   useCallback,
   useEffect,
@@ -18,7 +19,15 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
-import { Gauge, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
+import {
+  Gauge,
+  Pause,
+  Play,
+  RotateCcw,
+  Star,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { ASSET_CREDITS } from './game/assets';
 import { LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
@@ -217,7 +226,7 @@ export function AutorooApp() {
       name: 'start_autoroo_run',
       title: 'Start Autoroo run',
       description:
-        'Start the ready Autoroo run, equivalent to the visible Start driving button.',
+        'Start the ready Autoroo run, equivalent to the visible Let’s drive button.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -292,9 +301,10 @@ export function AutorooApp() {
 
   const speedMph = Math.round(snapshot.player.speedMps * 2.23694);
   const isPlaying = snapshot.phase === 'running';
+  const isOnStartScreen = snapshot.phase === 'ready';
 
   return (
-    <main className="autoroo-shell">
+    <main className="autoroo-shell" data-phase={snapshot.phase}>
       <GameCanvas
         ref={gameRef}
         muted={muted}
@@ -304,85 +314,174 @@ export function AutorooApp() {
         onEvent={onEvent}
       />
 
-      <div className="hud-top" aria-label="Game status">
-        <div className="score-chip">
-          <div className="score-chip-label">
-            <span>SCORE</span>
-            {scoreDelta > 0 && (
-              <output className="score-delta" aria-hidden="true">
-                +{scoreDelta}
-              </output>
-            )}
-          </div>
-          <strong>{formatScore(snapshot.score)}</strong>
-        </div>
-        <Button
-          className="hud-icon-button"
-          variant="ghost"
-          size="icon"
-          aria-label={muted ? 'Unmute sound' : 'Mute sound'}
-          onClick={toggleMuted}
-        >
-          {muted ? <VolumeX /> : <Volume2 />}
-        </Button>
-        {isPlaying && (
-          <Button
-            className="hud-icon-button"
-            variant="ghost"
-            size="icon"
-            aria-label="Pause game"
-            onClick={() => setPauseState(true)}
-          >
-            <Pause />
-          </Button>
-        )}
-        <div className="score-chip best-chip">
-          <span>PERSONAL BEST</span>
-          <strong>{formatScore(best)}</strong>
-        </div>
-      </div>
-
-      <div className="speed-chip" aria-label={`${speedMph} miles per hour`}>
-        <Gauge aria-hidden="true" />
-        <strong>{speedMph}</strong>
-        <span>MPH</span>
-      </div>
-
-      {snapshot.phase === 'ready' && (
-        <section className="start-card" aria-labelledby="autoroo-title">
-          <p className="eyebrow">ENDLESS FUN. QUESTIONABLE DRIVING</p>
-          <h1 id="autoroo-title">
-            AUTO<span>ROO</span>
-          </h1>
-          <div className="control-strip" aria-label="Keyboard controls">
-            <span>
-              <Kbd>←</Kbd>
-              <Kbd>→</Kbd> flip lanes
-            </span>
-            <span>
-              <Kbd>↑</Kbd>
-              <Kbd>↓</Kbd> speed
-            </span>
-            <span>
-              <Kbd>Space</Kbd> jump
-            </span>
-          </div>
-          <Button
-            className="play-button"
-            size="lg"
-            disabled={!sceneReady}
-            onClick={startRun}
-          >
-            <Play fill="currentColor" />
-            {sceneReady
-              ? 'Start driving'
-              : `Loading city ${Math.round(loadProgress * 100)}%`}
-          </Button>
-          <div className="start-actions">
-            <Button variant="ghost" size="sm" onClick={toggleMuted}>
+      {!isOnStartScreen && (
+        <>
+          <div className="hud-top" aria-label="Game status">
+            <div className="score-chip">
+              <div className="score-chip-label">
+                <span>SCORE</span>
+                {scoreDelta > 0 && (
+                  <output className="score-delta" aria-hidden="true">
+                    +{scoreDelta}
+                  </output>
+                )}
+              </div>
+              <strong>{formatScore(snapshot.score)}</strong>
+            </div>
+            <Button
+              className="hud-icon-button"
+              variant="ghost"
+              size="icon"
+              aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+              onClick={toggleMuted}
+            >
               {muted ? <VolumeX /> : <Volume2 />}
-              {muted ? 'Muted' : 'Sound on'}
             </Button>
+            {isPlaying && (
+              <Button
+                className="hud-icon-button"
+                variant="ghost"
+                size="icon"
+                aria-label="Pause game"
+                onClick={() => setPauseState(true)}
+              >
+                <Pause />
+              </Button>
+            )}
+            <div className="score-chip best-chip">
+              <span>PERSONAL BEST</span>
+              <strong>{formatScore(best)}</strong>
+            </div>
+          </div>
+
+          <div className="speed-chip" aria-label={`${speedMph} miles per hour`}>
+            <Gauge aria-hidden="true" />
+            <strong>{speedMph}</strong>
+            <span>MPH</span>
+          </div>
+        </>
+      )}
+
+      {isOnStartScreen && (
+        <section className="start-screen" aria-labelledby="autoroo-title">
+          <div className="start-stage">
+            <picture className="start-city">
+              <source
+                media="(max-aspect-ratio: 4/5)"
+                srcSet="/images/menu/autoroo-title-city-portrait.png"
+              />
+              <Image
+                src="/images/menu/autoroo-title-city.png"
+                alt=""
+                fill
+                sizes="100vw"
+                priority
+                unoptimized
+                draggable={false}
+              />
+            </picture>
+            <div className="start-backdrop" aria-hidden="true" />
+            <div className="start-stunt" aria-hidden="true">
+              <Image
+                src="/images/menu/autoroo-stunt-v2.png"
+                alt=""
+                width={1470}
+                height={1070}
+                unoptimized
+                draggable={false}
+              />
+            </div>
+
+            <div className="start-best" aria-label={`Personal best: ${best}`}>
+              <span>PERSONAL BEST</span>
+              <div className="start-best-score">
+                <Star fill="currentColor" aria-hidden="true" />
+                <strong>{formatScore(best)}</strong>
+                <Star fill="currentColor" aria-hidden="true" />
+              </div>
+            </div>
+
+            <Button
+              className="start-sound-button"
+              variant="ghost"
+              size="icon"
+              onClick={toggleMuted}
+              aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+            >
+              {muted ? (
+                <VolumeX aria-hidden="true" />
+              ) : (
+                <Volume2 aria-hidden="true" />
+              )}
+            </Button>
+
+            <h1 id="autoroo-title" className="sr-only">
+              Autoroo
+            </h1>
+            <p className="start-tagline">
+              <span>Endless fun.</span>
+              <span>Questionable driving.</span>
+            </p>
+
+            <div className="start-launch">
+              <Button
+                className="start-play-button"
+                size="lg"
+                disabled={!sceneReady}
+                onClick={startRun}
+              >
+                <Play fill="currentColor" aria-hidden="true" />
+                <span aria-live="polite">
+                  {sceneReady
+                    ? 'Let’s drive'
+                    : `Loading city ${Math.round(loadProgress * 100)}%`}
+                </span>
+              </Button>
+              <div className="start-actions">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleMuted}
+                  aria-label={
+                    muted ? 'Sound off. Unmute sound' : 'Sound on. Mute sound'
+                  }
+                >
+                  {muted ? (
+                    <VolumeX aria-hidden="true" />
+                  ) : (
+                    <Volume2 aria-hidden="true" />
+                  )}
+                  {muted ? 'Sound off' : 'Sound on'}
+                </Button>
+                <span className="start-action-divider" aria-hidden="true" />
+                <CreditsDialog />
+              </div>
+            </div>
+
+            <div className="start-controls" aria-label="Keyboard controls">
+              <span className="start-control">
+                <span className="start-keys">
+                  <Kbd>←</Kbd>
+                  <Kbd>→</Kbd>
+                </span>
+                <span>Flip lanes</span>
+              </span>
+              <span className="start-control">
+                <span className="start-keys">
+                  <Kbd>↑</Kbd>
+                  <Kbd>↓</Kbd>
+                </span>
+                <span>Speed</span>
+              </span>
+              <span className="start-control">
+                <Kbd className="space-key">Space</Kbd>
+                <span>Jump</span>
+              </span>
+              <span className="start-control">
+                <Kbd>Esc</Kbd>
+                <span>Pause</span>
+              </span>
+            </div>
           </div>
         </section>
       )}

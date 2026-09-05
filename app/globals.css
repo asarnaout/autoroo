@@ -54,6 +54,9 @@
   --border: rgb(19 40 58 / 18%);
   --input: rgb(19 40 58 / 18%);
   --ring: #ff5f57;
+  --menu-ink: #080f2b;
+  --menu-cream: #fff5d6;
+  --menu-yellow: #ffe52b;
 }
 
 * {
@@ -221,7 +224,6 @@ button {
   letter-spacing: 0.12em;
 }
 
-.start-card,
 .overlay-card {
   position: absolute;
   z-index: 20;
@@ -232,14 +234,6 @@ button {
   backdrop-filter: blur(13px);
 }
 
-.start-card {
-  left: clamp(22px, 7vw, 100px);
-  top: 50%;
-  width: min(560px, calc(100% - 44px));
-  transform: translateY(-45%);
-  padding: clamp(22px, 3vw, 38px);
-}
-
 .eyebrow {
   margin: 0 0 5px;
   color: #4e3fa4;
@@ -248,31 +242,6 @@ button {
   letter-spacing: 0.13em;
 }
 
-.start-card h1 {
-  margin: 0;
-  font: clamp(4.1rem, 9vw, 7rem)/0.86 var(--font-autoroo-display);
-  letter-spacing: -0.035em;
-  color: #172b3a;
-  transform: skewY(-1.5deg);
-}
-
-.start-card h1 span {
-  color: #ff5f57;
-}
-.control-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 15px;
-  margin: 20px 0 22px;
-  font-size: 0.8rem;
-  font-weight: 900;
-}
-
-.control-strip span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
 [data-slot='kbd'] {
   min-width: 24px;
   border: 1px solid rgb(19 40 58 / 22%);
@@ -309,16 +278,6 @@ button {
 .play-button:disabled {
   opacity: 0.7;
 }
-.start-actions {
-  display: inline-flex;
-  margin-left: 8px;
-  gap: 2px;
-  vertical-align: bottom;
-}
-.start-actions button {
-  font-weight: 850;
-}
-
 .overlay-card {
   top: 50%;
   left: 50%;
@@ -489,19 +448,6 @@ button {
   .hud-icon-button {
     display: none;
   }
-  .start-card {
-    left: 18px;
-    width: calc(100% - 36px);
-    transform: translateY(-43%);
-    padding: 22px;
-  }
-  .start-card h1 {
-    font-size: 4rem;
-  }
-  .start-actions {
-    display: flex;
-    margin: 10px 0 0;
-  }
   .speed-chip {
     right: 14px;
     bottom: 14px;
@@ -510,19 +456,6 @@ button {
   }
   .speed-chip strong {
     font-size: 1.9rem;
-  }
-}
-
-@media (max-height: 650px) {
-  .start-card {
-    top: 53%;
-    padding: 18px 24px;
-  }
-  .start-card h1 {
-    font-size: 4.4rem;
-  }
-  .control-strip {
-    margin: 12px 0 13px;
   }
 }
 

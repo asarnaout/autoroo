@@ -60,6 +60,21 @@ modification record. CC0 credits are retained voluntarily.
   `london-peckham-market-route.mp3` to `peckham-market-route.mp3`; SHA-256:
   `7a4cb6fb4e134295a0987264556acaf110c9563fdfdd897c1095ad96a6586dda`.
 
+## Menu artwork
+
+The artwork under `public/images/menu/` was created for Autoroo with OpenAI's
+built-in image-generation tool, following the project owner's selected designs.
+`autoroo-stunt-v2.png` is the preserved, gently animated car-and-bus illustration.
+`autoroo-city.png` supplies the surrounding city, and `autoroo-title-city.png`
+and `autoroo-title-city-portrait.png` combine the googly-eyed sticker logo with
+the city for landscape and portrait displays. Menu buttons, score, sound,
+credits, and keyboard hints are rendered separately as interactive HTML.
+These illustrations are separate from the imported 3D models listed above.
+
+The menu uses **Lilita One** by Juan Pablo del Peral, obtained from the
+[Google Fonts source repository](https://github.com/google/fonts/tree/main/ofl/lilitaone).
+Its SIL Open Font License is preserved in `public/fonts/OFL-LilitaOne.txt`.
+
 ## Adapted first-party code
 
 Road surfaces, lane markings, merge signs, the start countdown light, warning

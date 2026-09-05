@@ -492,6 +492,9 @@
 
 /* Hide the desktop guide before mobile input detection hydrates. */
 @media (any-pointer: coarse), (max-width: 900px) {
+  .start-launch {
+    bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
+  }
   .start-controls {
     display: none;
   }
@@ -501,7 +504,6 @@
     min-height: 100svh;
   }
   [data-touch='true'] .start-launch {
-    bottom: 24%;
     gap: 12px;
   }
   [data-touch='true'] .start-play-button {

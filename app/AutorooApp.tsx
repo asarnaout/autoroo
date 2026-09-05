@@ -565,8 +565,6 @@ export function AutorooApp() {
                   {muted ? 'Sound off' : 'Sound on'}
                 </Button>
                 <span className="start-action-divider" aria-hidden="true" />
-                <CreditsDialog />
-                <span className="start-action-divider" aria-hidden="true" />
                 <BoostersDialog />
               </div>
             </div>

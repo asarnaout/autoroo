@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, ChevronsUp, OctagonPause } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ChevronsUp } from 'lucide-react';
 import type { DrivingControl } from './input';
 
 export const TOUCH_CONTROLS_QUERY = '(any-pointer: coarse), (max-width: 900px)';
@@ -28,10 +28,6 @@ function TouchButton({
   const [pressed, setPressed] = useState(false);
 
   const press = (source: string) => {
-    const activation = `activation:${control}`;
-    if (source !== activation && sources.current.delete(activation)) {
-      onRelease(activation);
-    }
     sources.current.add(source);
     setPressed(true);
     onPress(control, source);
@@ -85,11 +81,6 @@ function TouchButton({
         // Assistive-technology clicks have no preceding pointer/key press.
         if (event.detail !== 0) return;
         const source = `activation:${control}`;
-        if (control === 'brake') {
-          if (sources.current.has(source)) release(source);
-          else press(source);
-          return;
-        }
         onPress(control, source);
         onRelease(source);
       }}
@@ -129,14 +120,6 @@ export function TouchControls({
           {...callbacks}
         >
           <ArrowRight aria-hidden="true" />
-        </TouchButton>
-        <TouchButton
-          control="brake"
-          label="BRAKE"
-          hint="Brake. Hold, or activate to toggle braking"
-          {...callbacks}
-        >
-          <OctagonPause aria-hidden="true" />
         </TouchButton>
       </div>
       <TouchButton

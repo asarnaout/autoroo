@@ -108,8 +108,9 @@ export class AutorooAudio {
         this.chirp(125, 205, 0.085, 'triangle', 0.045);
         this.chirp(225, 145, 0.075, 'sine', 0.03, 0.055);
         break;
-      case 'horn':
-        this.chirp(155, 132, 0.26, 'triangle', 0.05);
+      case 'crash':
+        this.noiseBurst();
+        this.chirp(120, 38, 0.48, 'sawtooth', 0.16);
         break;
       case 'warning':
         this.chirp(420, 330, 0.13, 'triangle', 0.04);
@@ -117,10 +118,6 @@ export class AutorooAudio {
           () => this.chirp(420, 330, 0.13, 'triangle', 0.04),
           180,
         );
-        break;
-      case 'crash':
-        this.noiseBurst();
-        this.chirp(120, 38, 0.48, 'sawtooth', 0.16);
         break;
       case 'bonus':
         this.chirp(430, 690, 0.12, 'sine', 0.065);

@@ -250,7 +250,6 @@ describe('progressive production traffic density', () => {
         for (const vehicle of snapshot.traffic) {
           if (seenTrafficIds.has(vehicle.id)) continue;
           seenTrafficIds.add(vehicle.id);
-          if (vehicle.role === 'rear-pressure') continue;
           expect(
             vehicle.absoluteZM - snapshot.player.absoluteZM,
             `${vehicle.id} was born inside the visible scene for seed ${seed}`,
@@ -357,7 +356,6 @@ describe('progressive production traffic density', () => {
 
         const visibleObstacle = snapshot.traffic.some(
           (vehicle) =>
-            vehicle.role !== 'rear-pressure' &&
             vehicle.absoluteZM > snapshot.player.absoluteZM &&
             vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
         );
@@ -378,7 +376,6 @@ describe('progressive production traffic density', () => {
                 snapshot.traffic
                   .filter(
                     (vehicle) =>
-                      vehicle.role !== 'rear-pressure' &&
                       vehicle.absoluteZM > snapshot.player.absoluteZM &&
                       vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
                   )
@@ -400,7 +397,6 @@ describe('progressive production traffic density', () => {
           if (band) {
             const visible = snapshot.traffic.filter(
               (vehicle) =>
-                vehicle.role !== 'rear-pressure' &&
                 vehicle.absoluteZM > snapshot.player.absoluteZM &&
                 vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
             ).length;
@@ -416,7 +412,6 @@ describe('progressive production traffic density', () => {
           isMixedChallenge(snapshot.activeCertificate);
         const immediateTrafficPressure = snapshot.traffic.some(
           (vehicle) =>
-            vehicle.role !== 'rear-pressure' &&
             vehicle.absoluteZM > snapshot.player.absoluteZM &&
             vehicle.absoluteZM <= snapshot.player.absoluteZM + 230,
         );
@@ -600,8 +595,6 @@ describe('progressive production traffic density', () => {
             mode === 'no-jump'
               ? { ...input, jumpPressed: false }
               : {
-                  accelerate: true,
-                  brake: false,
                   laneDelta: 0,
                   jumpPressed:
                     snapshot.tick >=

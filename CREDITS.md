@@ -98,7 +98,7 @@ streetlights, additive pavement light pools, and related Babylon presentation
 techniques are newly reduced/adapted from Curbside Rush's first-party code. The
 inherited MIT notice is preserved in `LICENSE` (Copyright (c) 2026 Ahmed
 Arnaout). Autoroo's endless
-topology, deterministic fixed-tick simulation, gate certification, rear pressure,
+topology, deterministic fixed-tick simulation, gate certification,
 render pools, HUD, synthesised sound effects, and WebMCP integration are
 Autoroo-specific work.
 

@@ -1,19 +1,15 @@
 import type { InputFrame } from './contracts';
 
 export type InputAction = 'pause' | 'restart' | null;
-export type DrivingControl = 'accelerate' | 'brake' | 'left' | 'right' | 'jump';
+export type DrivingControl = 'left' | 'right' | 'jump';
 
 const KEY_CONTROLS: Readonly<Record<string, DrivingControl>> = {
-  ArrowUp: 'accelerate',
-  ArrowDown: 'brake',
   ArrowLeft: 'left',
   ArrowRight: 'right',
   Space: 'jump',
 };
 
 const GAME_KEYS = new Set([
-  'ArrowUp',
-  'ArrowDown',
   'ArrowLeft',
   'ArrowRight',
   'Space',
@@ -24,13 +20,8 @@ const GAME_KEYS = new Set([
 
 export class InputBuffer {
   private readonly held = new Map<string, DrivingControl>();
-  private autoAccelerate = true;
   private readonly laneQueue: (-1 | 1)[] = [];
   private jumpQueued = false;
-
-  setAutoAccelerate(enabled: boolean): void {
-    this.autoAccelerate = enabled;
-  }
 
   press(control: DrivingControl, source: string): void {
     if (this.held.has(source)) return;
@@ -73,8 +64,6 @@ export class InputBuffer {
     const jumpTapped = this.jumpQueued;
     this.jumpQueued = false;
     return {
-      accelerate: this.autoAccelerate || this.isHeld('accelerate'),
-      brake: this.isHeld('brake'),
       laneDelta,
       jumpPressed,
       jumpTapped,

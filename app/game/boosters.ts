@@ -1,4 +1,10 @@
-import { LANE_X, FIXED_DT, MAX_SPEED_MPS, activeLanes } from './constants';
+import {
+  LANE_X,
+  FIXED_DT,
+  MAX_SPEED_MPS,
+  ACCELERATION_MPS2,
+  activeLanes,
+} from './constants';
 import type {
   BoosterKind,
   BoosterPickup,
@@ -47,6 +53,7 @@ export function makeBoosterState(): BoosterState {
     protectionS: 0,
     doubleJumpOriginYM: null,
     doubleJumpElapsedS: 0,
+    doubleJumpInitialAirTimeS: 0,
     doubleJumpUsedThisFlight: false,
     rocket: null,
     effect: null,
@@ -168,8 +175,19 @@ export function advanceBoosterFlight(
     if (player.yM === 0) {
       player.airborne = false;
       player.verticalSpeedMps = 0;
-      player.speedMps = player.takeoffSpeedMps;
+      player.speedMps = Math.min(
+        MAX_SPEED_MPS,
+        player.takeoffSpeedMps +
+          ACCELERATION_MPS2 *
+            Math.max(
+              0,
+              boosts.doubleJumpInitialAirTimeS +
+                boosts.doubleJumpElapsedS -
+                FIXED_DT,
+            ),
+      );
       boosts.doubleJumpOriginYM = null;
+      boosts.doubleJumpInitialAirTimeS = 0;
     }
   }
   player.maxForwardM = Math.max(player.maxForwardM, player.absoluteZM);

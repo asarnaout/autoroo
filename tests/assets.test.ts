@@ -145,7 +145,6 @@ describe('curated asset supply chain', () => {
     expect(RENDER_POOL_LIMITS).toEqual({
       frontCars: 40,
       buses: 16,
-      rearCars: 4,
       roadTiles: 16,
     });
     expect(Object.keys(MODEL_URLS)).toHaveLength(12);

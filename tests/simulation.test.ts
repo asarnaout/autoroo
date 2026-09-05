@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACCELERATION_MPS2,
-  BRAKING_MPS2,
-  COAST_DRAG_MPS2,
   FIXED_DT,
   GATE_FORWARD_STEADY_M,
   GATE_LANDING_CLEAR_M,
@@ -40,13 +38,10 @@ import {
 } from '../app/game/simulation';
 import { certificateBotInput } from './bot-driver';
 
-const idle: InputFrame = {
-  accelerate: false,
-  brake: false,
+const noControls: InputFrame = {
   laneDelta: 0,
   jumpPressed: false,
 };
-const accelerate: InputFrame = { ...idle, accelerate: true };
 
 function player(patch: Partial<PlayerState> = {}): PlayerState {
   return {
@@ -105,42 +100,37 @@ describe('road defaults', () => {
 });
 
 describe('fixed-step vehicle physics', () => {
-  it('applies acceleration, braking, and coasting at their declared rates', () => {
+  it('automatically accelerates without a speed-control input', () => {
     const state = player({ speedMps: 10 });
-    advancePlayerPhysics(state, accelerate);
-    expect(state.speedMps).toBeCloseTo(10 + ACCELERATION_MPS2 * FIXED_DT, 10);
-    advancePlayerPhysics(state, { ...idle, brake: true });
-    expect(state.speedMps).toBeCloseTo(
-      10 + (ACCELERATION_MPS2 - BRAKING_MPS2) * FIXED_DT,
-      10,
-    );
-    const beforeCoast = state.speedMps;
-    advancePlayerPhysics(state, idle);
-    expect(state.speedMps).toBeCloseTo(
-      beforeCoast - COAST_DRAG_MPS2 * FIXED_DT,
-      10,
-    );
+    for (let tick = 1; tick <= 30; tick += 1) {
+      advancePlayerPhysics(state, noControls);
+      expect(state.speedMps).toBeCloseTo(
+        10 + ACCELERATION_MPS2 * FIXED_DT * tick,
+        10,
+      );
+    }
   });
 
   it('caps acceleration at the declared higher top speed', () => {
     const state = player({ speedMps: MAX_SPEED_MPS - 0.01 });
-    advancePlayerPhysics(state, accelerate);
+    advancePlayerPhysics(state, noControls);
     expect(state.speedMps).toBe(MAX_SPEED_MPS);
   });
 
-  it('jumps in place at zero speed and lands after the fixed flight', () => {
+  it('keeps moving when jumping from rest and lands after the fixed flight', () => {
     const state = player();
-    advancePlayerPhysics(state, { ...idle, jumpPressed: true });
+    advancePlayerPhysics(state, { ...noControls, jumpPressed: true });
     let apex = state.yM;
     for (
       let tick = 1;
       tick <= Math.ceil(JUMP_FLIGHT_SECONDS / FIXED_DT) + 1;
       tick += 1
     ) {
-      advancePlayerPhysics(state, idle);
+      advancePlayerPhysics(state, noControls);
       apex = Math.max(apex, state.yM);
     }
-    expect(state.absoluteZM).toBe(0);
+    expect(state.takeoffSpeedMps).toBeGreaterThan(0);
+    expect(state.absoluteZM).toBeGreaterThan(0);
     expect(state.airborne).toBe(false);
     expect(state.yM).toBe(0);
     expect(apex).toBeCloseTo(JUMP_APEX_M, 2);
@@ -148,22 +138,30 @@ describe('fixed-step vehicle physics', () => {
 
   it('holds takeoff speed in air, making jump distance proportional to speed', () => {
     const state = player({ speedMps: 20 });
-    advancePlayerPhysics(state, { ...idle, jumpPressed: true });
+    advancePlayerPhysics(state, { ...noControls, jumpPressed: true });
     const takeoffSpeed = state.takeoffSpeedMps;
-    while (state.airborne)
-      advancePlayerPhysics(state, { ...idle, brake: true });
+    while (state.airborne) {
+      advancePlayerPhysics(state, noControls);
+      if (state.airborne) expect(state.speedMps).toBe(takeoffSpeed);
+    }
     expect(state.absoluteZM).toBeGreaterThanOrEqual(
       takeoffSpeed * JUMP_FLIGHT_SECONDS,
     );
     expect(state.absoluteZM).toBeLessThanOrEqual(
       takeoffSpeed * (JUMP_FLIGHT_SECONDS + FIXED_DT),
     );
-    expect(state.speedMps).toBeCloseTo(takeoffSpeed, 8);
+    expect(state.speedMps).toBeCloseTo(
+      Math.min(
+        MAX_SPEED_MPS,
+        takeoffSpeed + ACCELERATION_MPS2 * (state.jumpElapsedS - FIXED_DT),
+      ),
+      8,
+    );
   });
 
   it('takes off on the first fixed tick after landing while jump is held', () => {
     const state = player({ speedMps: 20 });
-    const heldJump = { ...idle, jumpPressed: true };
+    const heldJump = { ...noControls, jumpPressed: true };
     advancePlayerPhysics(state, heldJump);
     let flightTicks = 1;
     while (state.airborne) {
@@ -179,12 +177,25 @@ describe('fixed-step vehicle physics', () => {
     expect(state.jumpElapsedS).toBe(FIXED_DT);
   });
 
+  it('reaches full speed while continuously hopping from the start', () => {
+    const state = player();
+    const heldJump = { ...noControls, jumpPressed: true };
+    let previousZM = 0;
+    for (let tick = 0; tick < 360; tick += 1) {
+      advancePlayerPhysics(state, heldJump);
+      expect(state.absoluteZM).toBeGreaterThan(previousZM);
+      previousZM = state.absoluteZM;
+    }
+    expect(state.speedMps).toBe(MAX_SPEED_MPS);
+    expect(state.takeoffSpeedMps).toBe(MAX_SPEED_MPS);
+  });
+
   it('keeps an exact 51-tick rhythm across a held-jump chain', () => {
     const state = player({ speedMps: MAX_SPEED_MPS });
     const takeoffTicks: number[] = [];
     for (let tick = 0; tick <= 153; tick += 1) {
       const wasAirborne = state.airborne;
-      advancePlayerPhysics(state, { ...idle, jumpPressed: true });
+      advancePlayerPhysics(state, { ...noControls, jumpPressed: true });
       if (!wasAirborne && state.airborne) takeoffTicks.push(tick);
     }
     expect(takeoffTicks).toEqual([0, 51, 102, 153]);
@@ -195,7 +206,7 @@ describe('lane movement and collision/scoring rules', () => {
   it('animates between bounded lanes and allows airborne lane changes', () => {
     const simulation = new AutorooSimulation(12);
     simulation.start();
-    simulation.tick({ ...idle, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
     let playerState = simulation.snapshot().player;
     expect(playerState).toMatchObject({
       lane: 2,
@@ -207,7 +218,7 @@ describe('lane movement and collision/scoring rules', () => {
     expect(simulation.drainEvents()).toEqual([{ type: 'lane-change' }]);
 
     for (let tick = 1; tick < LANE_CHANGE_TICKS; tick += 1)
-      simulation.tick(idle);
+      simulation.tick(noControls);
     playerState = simulation.snapshot().player;
     expect(playerState).toMatchObject({
       lane: 2,
@@ -216,16 +227,16 @@ describe('lane movement and collision/scoring rules', () => {
       laneChangeDirection: 0,
     });
 
-    simulation.tick({ ...idle, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
     expect(simulation.snapshot().player).toMatchObject({
       lane: 2,
       xM: LANE_X[2],
       laneChangeDirection: 0,
     });
     expect(simulation.drainEvents()).toEqual([]);
-    simulation.tick({ ...idle, jumpPressed: true });
+    simulation.tick({ ...noControls, jumpPressed: true });
     simulation.drainEvents();
-    simulation.tick({ ...idle, laneDelta: -1 });
+    simulation.tick({ ...noControls, laneDelta: -1 });
     playerState = simulation.snapshot().player;
     expect(playerState).toMatchObject({
       lane: 1,
@@ -249,32 +260,32 @@ describe('lane movement and collision/scoring rules', () => {
     });
     simulation.__debugReplaceTraffic([]);
 
-    simulation.tick({ ...idle, laneDelta: 1 });
-    simulation.tick({ ...idle, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
     expect(simulation.snapshot().player).toMatchObject({
       lane: 1,
       queuedLane: 2,
       laneChangeDirection: 1,
     });
-    simulation.tick({ ...idle, laneDelta: -1 });
+    simulation.tick({ ...noControls, laneDelta: -1 });
     expect(simulation.snapshot().player.queuedLane).toBeNull();
     while (simulation.snapshot().player.laneChangeDirection !== 0)
-      simulation.tick(idle);
+      simulation.tick(noControls);
     expect(simulation.snapshot().player).toMatchObject({
       lane: 1,
       xM: LANE_X[1],
     });
 
     simulation.drainEvents();
-    simulation.tick({ ...idle, laneDelta: 1 });
-    simulation.tick({ ...idle, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
+    simulation.tick({ ...noControls, laneDelta: 1 });
     for (let tick = 0; tick < LANE_CHANGE_TICKS * 2; tick += 1) {
       if (
         simulation.snapshot().player.lane === 3 &&
         simulation.snapshot().player.laneChangeDirection === 0
       )
         break;
-      simulation.tick(idle);
+      simulation.tick(noControls);
     }
     expect(simulation.snapshot().player).toMatchObject({
       lane: 3,
@@ -362,7 +373,7 @@ describe('lane movement and collision/scoring rules', () => {
       ]);
       for (let tick = 0; tick < 24; tick += 1) {
         simulation.tick({
-          ...idle,
+          ...noControls,
           laneDelta: tick === laneChangeTick ? 1 : 0,
         });
         if (simulation.snapshot().phase === 'game-over') break;
@@ -380,10 +391,10 @@ describe('lane movement and collision/scoring rules', () => {
     simulation.__debugReplaceTraffic([
       createTrafficVehicle('bonk', 'bonk', 'sedan', 'ordinary', 1, 0, 0),
     ]);
-    simulation.tick(idle);
+    simulation.tick(noControls);
     expect(simulation.snapshot().phase).toBe('game-over');
     const hash = simulation.stateHash();
-    simulation.tick(accelerate);
+    simulation.tick(noControls);
     expect(simulation.stateHash()).toBe(hash);
   });
 
@@ -401,9 +412,9 @@ describe('lane movement and collision/scoring rules', () => {
       yM: 4,
       previousYM: 4,
     });
-    jumpRun.tick(idle);
+    jumpRun.tick(noControls);
     const jumpBonus = jumpRun.snapshot().bonusScore;
-    jumpRun.tick(idle);
+    jumpRun.tick(noControls);
     expect(jumpBonus).toBe(100);
     expect(jumpRun.snapshot().bonusScore).toBe(100);
 
@@ -412,10 +423,10 @@ describe('lane movement and collision/scoring rules', () => {
     closeRun.__debugReplaceTraffic([
       createTrafficVehicle('close', 'row', 'suv', 'ordinary', 2, 3, 0),
     ]);
-    closeRun.__debugSetPlayer({ speedMps: 600 });
-    closeRun.tick(idle);
+    closeRun.__debugSetPlayer({ speedMps: MAX_SPEED_MPS });
+    for (let tick = 0; tick < 20; tick += 1) closeRun.tick(noControls);
     const closeBonus = closeRun.snapshot().bonusScore;
-    closeRun.tick(idle);
+    for (let tick = 0; tick < 20; tick += 1) closeRun.tick(noControls);
     expect(closeBonus).toBe(25);
     expect(closeRun.snapshot().bonusScore).toBe(25);
   });
@@ -435,12 +446,12 @@ describe('lane movement and collision/scoring rules', () => {
       previousYM: 4,
       maxForwardM: 123.9,
     });
-    simulation.tick(idle);
+    simulation.tick(noControls);
     expect(simulation.snapshot()).toMatchObject({
       bonusScore: 250,
       score: 373,
     });
-    simulation.tick(idle);
+    simulation.tick(noControls);
     expect(simulation.snapshot().bonusScore).toBe(250);
   });
 
@@ -460,13 +471,13 @@ describe('lane movement and collision/scoring rules', () => {
       ),
     ]);
     simulation.__debugSetPlayer({ speedMps: MAX_SPEED_MPS });
-    simulation.tick({ ...idle, jumpPressed: true });
+    simulation.tick({ ...noControls, jumpPressed: true });
     for (
       let tick = 0;
       tick < 80 && simulation.snapshot().bonusScore === 0;
       tick += 1
     ) {
-      simulation.tick(idle);
+      simulation.tick(noControls);
     }
     expect(simulation.snapshot()).toMatchObject({
       phase: 'running',
@@ -502,7 +513,7 @@ describe('lane movement and collision/scoring rules', () => {
       previousYM: 4,
     });
 
-    simulation.tick(idle);
+    simulation.tick(noControls);
 
     expect(simulation.phaseName).toBe('running');
     expect(
@@ -546,7 +557,7 @@ describe('lane movement and collision/scoring rules', () => {
         maxForwardM: 100,
       });
       simulation.__debugReplaceTraffic(reverse ? [bus, car] : [car, bus]);
-      simulation.tick(idle);
+      simulation.tick(noControls);
       const result = {
         stateHash: simulation.stateHash(),
         snapshot: simulation.snapshot(),
@@ -587,7 +598,7 @@ describe('lane movement and collision/scoring rules', () => {
       simulation.__debugReplaceTraffic(
         reverse ? [crash, cleared] : [cleared, crash],
       );
-      simulation.tick(idle);
+      simulation.tick(noControls);
       return {
         phase: simulation.snapshot().phase,
         bonus: simulation.snapshot().bonusScore,
@@ -887,8 +898,8 @@ describe('winnability certificates', () => {
     expect(verifyJumpCertificate(request, certificate!)).toBe(true);
 
     const tampered = structuredClone(certificate!);
-    (tampered.witness[0].input as { brake: boolean }).brake =
-      !tampered.witness[0].input.brake;
+    (tampered.witness[0].input as { jumpPressed: boolean }).jumpPressed =
+      !tampered.witness[0].input.jumpPressed;
     expect(verifyJumpCertificate(request, tampered)).toBe(false);
 
     const forgedPatches: readonly Record<string, unknown>[] = [
@@ -924,7 +935,7 @@ describe('winnability certificates', () => {
       tick < 600 && simulation.getGroundCertificates().length === 0;
       tick += 1
     ) {
-      simulation.tick(accelerate);
+      simulation.tick(noControls);
     }
     const certificates = simulation.getGroundCertificates();
     expect(certificates.length).toBeGreaterThan(0);
@@ -977,7 +988,7 @@ describe('winnability certificates', () => {
       tick < 180 && simulation.debugGateState().pendingGateZM === invalidGateZM;
       tick += 1
     ) {
-      simulation.tick(accelerate);
+      simulation.tick(noControls);
     }
     const next = simulation.debugGateState();
     expect(next.pendingGateAttempted).toBe(false);
@@ -1009,7 +1020,7 @@ describe('winnability certificates', () => {
     (simulation as unknown as { encounterCursorM: number }).encounterCursorM =
       gateZM + GATE_FORWARD_STEADY_M;
 
-    simulation.tick(idle);
+    simulation.tick(noControls);
 
     expect(simulation.renderTick).toBe(1);
     expect(simulation.phaseName).toBe('running');
@@ -1090,97 +1101,34 @@ describe('winnability certificates', () => {
   }, 30_000);
 });
 
-describe('rear pressure and deterministic render timing', () => {
-  it('warns, spawns no more than four pursuers, and retires them after recovery', () => {
+describe('automatic driving and deterministic render timing', () => {
+  it('keeps moving without controls and resumes automatic driving after pause or restart', () => {
     const simulation = new AutorooSimulation(44);
     simulation.start();
+    let previousZM = simulation.renderPlayer.absoluteZM;
+    for (let tick = 0; tick < 600; tick += 1) {
+      // Isolate automatic movement from optional player dodges.
+      simulation.__debugReplaceTraffic([]);
+      simulation.tick(noControls);
+      expect(simulation.phaseName).toBe('running');
+      expect(simulation.renderPlayer.absoluteZM).toBeGreaterThan(previousZM);
+      previousZM = simulation.renderPlayer.absoluteZM;
+    }
+    expect(simulation.renderPlayer.speedMps).toBe(MAX_SPEED_MPS);
+
+    simulation.setPaused(true);
+    const pausedHash = simulation.stateHash();
+    simulation.tick(noControls);
+    expect(simulation.stateHash()).toBe(pausedHash);
+    simulation.setPaused(false);
     simulation.__debugReplaceTraffic([]);
-    for (let tick = 0; tick < 490; tick += 1) simulation.tick(idle);
-    let snapshot = simulation.snapshot();
-    expect(snapshot.rearWarning).toBe(true);
-    const rearPressure = snapshot.traffic.filter(
-      (vehicle) => vehicle.role === 'rear-pressure',
-    );
-    expect(rearPressure).toHaveLength(snapshot.laneCount);
-    expect(
-      rearPressure
-        .map((vehicle) => vehicle.lane)
-        .sort((first, second) => first - second),
-    ).toEqual(activeLanes(snapshot.laneMask));
-    for (
-      let tick = 0;
-      tick < 180 && simulation.phaseName === 'running';
-      tick += 1
-    ) {
-      simulation.tick(accelerate);
-      const running = simulation.snapshot();
-      for (const vehicle of running.traffic.filter(
-        (candidate) => candidate.role === 'rear-pressure',
-      )) {
-        expect(vehicle.speedMps - running.player.speedMps).toBeLessThanOrEqual(
-          6 + 1e-9,
-        );
-      }
-    }
-    snapshot = simulation.snapshot();
-    expect(snapshot.phase).toBe('running');
-    expect(
-      snapshot.traffic.filter((vehicle) => vehicle.role === 'rear-pressure'),
-    ).toHaveLength(0);
-  });
+    simulation.tick(noControls);
+    expect(simulation.renderPlayer.absoluteZM).toBeGreaterThan(previousZM);
 
-  it('gives tapers a bounded rear-pack grace and rear traffic can cause a real collision', () => {
-    const transitionRun = new AutorooSimulation(45);
-    transitionRun.start();
-    const transition = Array.from({ length: 20 }, (_, index) =>
-      roadModuleAt(45, index),
-    ).find((module) => module.transition);
-    expect(transition).toBeDefined();
-    transitionRun.__debugSetPlayer({
-      absoluteZM: transition!.startM + 10,
-      previousZM: transition!.startM + 10,
-      maxForwardM: transition!.startM + 10,
-    });
-    transitionRun.__debugReplaceTraffic([]);
-    transitionRun.__debugSetRearState({
-      slowTimeS: 8,
-      rearPackActive: false,
-    });
-    transitionRun.tick(idle);
-    expect(
-      transitionRun
-        .snapshot()
-        .traffic.filter((vehicle) => vehicle.role === 'rear-pressure'),
-    ).toHaveLength(0);
-    for (let tick = 0; tick < 180; tick += 1) transitionRun.tick(idle);
-    expect(
-      transitionRun
-        .snapshot()
-        .traffic.filter((vehicle) => vehicle.role === 'rear-pressure').length,
-    ).toBeGreaterThan(0);
-
-    const collisionRun = new AutorooSimulation(46);
-    collisionRun.start();
-    collisionRun.__debugReplaceTraffic([
-      createTrafficVehicle(
-        'rear-hit',
-        'rear',
-        'sedan',
-        'rear-pressure',
-        1,
-        -4.2,
-        6,
-      ),
-    ]);
-    for (
-      let tick = 0;
-      tick < 10 && collisionRun.phaseName === 'running';
-      tick += 1
-    ) {
-      collisionRun.tick(idle);
-    }
-    expect(collisionRun.snapshot().phase).toBe('game-over');
-    expect(collisionRun.snapshot().bonusScore).toBe(0);
+    simulation.restart();
+    simulation.tick(noControls);
+    expect(simulation.renderPlayer.speedMps).toBeGreaterThan(0);
+    expect(simulation.renderPlayer.absoluteZM).toBeGreaterThan(0);
   });
 
   it('never deletes already-revealed traffic as it approaches a taper', () => {
@@ -1207,7 +1155,7 @@ describe('rear pressure and deterministic render timing', () => {
         8,
       ),
     ]);
-    simulation.tick(idle);
+    simulation.tick(noControls);
     expect(
       simulation.renderTraffic.some((vehicle) => vehicle.id === 'taper-bound'),
     ).toBe(true);
@@ -1218,39 +1166,23 @@ describe('rear pressure and deterministic render timing', () => {
     simulation.start();
     for (let tick = 0; tick < 5000; tick += 1) {
       const snapshot = simulation.snapshot();
-      const nearest = snapshot.traffic
-        .filter(
-          (vehicle) =>
-            vehicle.role === 'ordinary' &&
-            vehicle.absoluteZM >= snapshot.player.absoluteZM,
-        )
-        .sort((first, second) => first.absoluteZM - second.absoluteZM)[0];
-      const route = nearest
-        ? simulation
-            .getGroundCertificates()
-            .find((certificate) => certificate.blockerIds.includes(nearest.id))
-        : undefined;
-      let laneDelta: -1 | 0 | 1 = 0;
-      if (route && snapshot.player.lane !== route.targetLane) {
-        laneDelta = snapshot.player.lane < route.targetLane ? 1 : -1;
-      }
-      simulation.__debugSetRearState({ slowTimeS: 0, recoveryTimeS: 0 });
-      simulation.tick({
-        accelerate: snapshot.player.speedMps < 8.2,
-        brake: snapshot.player.speedMps > 8.3,
-        laneDelta,
-        jumpPressed: false,
-      });
+      simulation.tick(certificateBotInput(simulation, snapshot));
       expect(simulation.phaseName).toBe('running');
       for (const vehicle of simulation.renderTraffic) {
         if (vehicle.role !== 'ordinary') continue;
-        const roadModule = roadModuleForDistance(0, vehicle.absoluteZM);
-        if (!roadModule.transition) continue;
-        const persistentMask =
-          roadModule.transition.kind === 'remove'
-            ? roadModule.toLaneMask
-            : roadModule.fromLaneMask;
-        expect(hasLane(persistentMask, vehicle.lane)).toBe(true);
+        // Closing lanes remain open through the straight warning section.
+        // The vehicle's entire front edge must retire before the taper.
+        const frontEdgeM =
+          vehicle.absoluteZM + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
+        expect(
+          hasLane(laneMaskAt(0, frontEdgeM), vehicle.lane),
+          JSON.stringify({
+            tick,
+            playerZM: simulation.renderPlayer.absoluteZM,
+            vehicle,
+            frontEdgeM,
+          }),
+        ).toBe(true);
       }
     }
   });
@@ -1260,8 +1192,7 @@ describe('rear pressure and deterministic render timing', () => {
     simulation.start();
     for (let tick = 0; tick < 7000; tick += 1) {
       simulation.__debugReplaceTraffic([]);
-      simulation.__debugSetRearState({ slowTimeS: 0, recoveryTimeS: 0 });
-      simulation.tick({ ...accelerate, jumpPressed: tick % 90 === 0 });
+      simulation.tick({ ...noControls, jumpPressed: tick % 90 === 0 });
     }
     expect(simulation.debugRetainedCounts().pendingEvents).toBe(64);
     expect(simulation.drainEvents()).toHaveLength(64);
@@ -1271,7 +1202,7 @@ describe('rear pressure and deterministic render timing', () => {
   it('includes pending observable events in the exact state hash', () => {
     const simulation = new AutorooSimulation(49);
     simulation.start();
-    simulation.tick({ ...idle, jumpPressed: true });
+    simulation.tick({ ...noControls, jumpPressed: true });
     const withJumpEvent = simulation.stateHash();
     expect(simulation.drainEvents()).toContainEqual({ type: 'jump' });
     expect(simulation.stateHash()).not.toBe(withJumpEvent);
@@ -1284,34 +1215,17 @@ describe('rear pressure and deterministic render timing', () => {
     source.start();
     const trace: InputFrame[] = [];
     const laneCounts = new Set<number>();
-    let sawRear = false;
     let sawGate = false;
     for (let tick = 0; tick < totalTicks; tick += 1) {
       const snapshot = source.snapshot();
-      const routeInput = certificateBotInput(source, snapshot);
-      const input =
-        tick < 490
-          ? idle
-          : {
-              ...routeInput,
-              // The intentional eight-second stop abandons the original
-              // ground witnesses. Recover by hopping ordinary traffic until
-              // a newly locked mixed certificate takes over exact control.
-              jumpPressed:
-                routeInput.jumpPressed ||
-                (!snapshot.activeCertificate && snapshot.player.speedMps >= 28),
-            };
+      const input = certificateBotInput(source, snapshot);
       trace.push({ ...input });
       source.tick(input);
       const after = source.snapshot();
       laneCounts.add(after.laneCount);
-      sawRear ||= after.traffic.some(
-        (vehicle) => vehicle.role === 'rear-pressure',
-      );
       sawGate ||= after.activeCertificate !== null;
       expect(after.phase).toBe('running');
     }
-    expect(sawRear).toBe(true);
     expect(sawGate).toBe(true);
     expect(laneCounts).toEqual(new Set([2, 3, 4]));
 
@@ -1332,7 +1246,7 @@ describe('rear pressure and deterministic render timing', () => {
       const hash = runRenderSchedule(
         simulation,
         frames,
-        (tick) => trace[tick] ?? idle,
+        (tick) => trace[tick] ?? noControls,
       );
       expect(simulation.renderTick).toBe(totalTicks);
       return hash;
@@ -1345,7 +1259,7 @@ describe('rear pressure and deterministic render timing', () => {
     expect(run(jitter)).toBe(reference);
   });
 
-  it('hashes exact future-determining physics and rear state without traffic-order noise', () => {
+  it('hashes exact physics and traffic lifetimes without traffic-order noise', () => {
     const first = new AutorooSimulation(56);
     const second = new AutorooSimulation(56);
     first.__debugSetPlayer({ speedMps: 1 });
@@ -1381,7 +1295,7 @@ describe('rear pressure and deterministic render timing', () => {
     ordered.__debugReplaceTraffic([a, b]);
     reversed.__debugReplaceTraffic([b, a]);
     expect(ordered.stateHash()).toBe(reversed.stateHash());
-    reversed.__debugSetRearState({ slowTimeS: FIXED_DT });
+    reversed.__debugReplaceTraffic([b, { ...a, retireAtZM: 51 }]);
     expect(ordered.stateHash()).not.toBe(reversed.stateHash());
   });
 });

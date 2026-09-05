@@ -92,7 +92,6 @@ describe.runIf(stress)('long-run procedural stress', () => {
       let activeGateId: string | null = null;
       let maxFrontCars = 0;
       let maxBuses = 0;
-      let maxRearCars = 0;
       let maxGroundCertificates = 0;
       let emptyViewStartedM: number | null = null;
       let maxEmptyViewM = 0;
@@ -110,12 +109,10 @@ describe.runIf(stress)('long-run procedural stress', () => {
         for (const vehicle of snapshot.traffic) {
           if (!seenTrafficIds.has(vehicle.id)) {
             seenTrafficIds.add(vehicle.id);
-            if (vehicle.role !== 'rear-pressure') {
-              expect(
-                vehicle.absoluteZM - snapshot.player.absoluteZM,
-                `${vehicle.id} was born inside the visible scene for seed ${seed}`,
-              ).toBeGreaterThan(TRAFFIC_RENDER_AHEAD_M);
-            }
+            expect(
+              vehicle.absoluteZM - snapshot.player.absoluteZM,
+              `${vehicle.id} was born inside the visible scene for seed ${seed}`,
+            ).toBeGreaterThan(TRAFFIC_RENDER_AHEAD_M);
           }
           if (vehicle.role === 'ordinary')
             ordinaryEncounters.add(vehicle.encounterId);
@@ -152,7 +149,6 @@ describe.runIf(stress)('long-run procedural stress', () => {
 
         const hasVisibleObstacle = snapshot.traffic.some(
           (vehicle) =>
-            vehicle.role !== 'rear-pressure' &&
             vehicle.absoluteZM > snapshot.player.absoluteZM &&
             vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
         );
@@ -182,7 +178,6 @@ describe.runIf(stress)('long-run procedural stress', () => {
           isMixedChallenge(snapshot.activeCertificate);
         const immediateTrafficPressure = snapshot.traffic.some(
           (vehicle) =>
-            vehicle.role !== 'rear-pressure' &&
             vehicle.absoluteZM > snapshot.player.absoluteZM &&
             vehicle.absoluteZM <= snapshot.player.absoluteZM + 230,
         );
@@ -232,15 +227,13 @@ describe.runIf(stress)('long-run procedural stress', () => {
         const counts = simulation.debugRetainedCounts();
         maxFrontCars = Math.max(maxFrontCars, counts.frontCars);
         maxBuses = Math.max(maxBuses, counts.buses);
-        maxRearCars = Math.max(maxRearCars, counts.rearCars);
         maxGroundCertificates = Math.max(
           maxGroundCertificates,
           counts.groundCertificates,
         );
         expect(counts.frontCars).toBeLessThanOrEqual(40);
         expect(counts.buses).toBeLessThanOrEqual(16);
-        expect(counts.rearCars).toBeLessThanOrEqual(4);
-        expect(counts.totalTraffic).toBeLessThanOrEqual(60);
+        expect(counts.totalTraffic).toBeLessThanOrEqual(56);
         expect(counts.activeCertificates).toBeLessThanOrEqual(1);
         expect(counts.groundCertificates).toBeLessThanOrEqual(18);
         expect(counts.witnessPoints).toBeLessThanOrEqual(2000);
@@ -271,7 +264,6 @@ describe.runIf(stress)('long-run procedural stress', () => {
       expect(steps).toBeLessThan(260_000);
       expect(maxFrontCars).toBeGreaterThan(0);
       expect(maxBuses).toBeGreaterThan(0);
-      expect(maxRearCars).toBeLessThanOrEqual(4);
       expect(maxGroundCertificates).toBeGreaterThan(0);
       expect(maxEmptyViewTicks * FIXED_DT).toBeLessThanOrEqual(1.5);
       expect(maxEmptyViewM).toBeLessThanOrEqual(55);

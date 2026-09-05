@@ -10,8 +10,6 @@ import {
 } from '../app/game/snapshotPublication';
 
 const idle: InputFrame = {
-  accelerate: false,
-  brake: false,
   laneDelta: 0,
   jumpPressed: false,
 };

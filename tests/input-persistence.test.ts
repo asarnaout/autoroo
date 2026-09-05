@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InputBuffer } from '../app/game/input';
+import { InputBuffer, isGameKey } from '../app/game/input';
 import { parseStoredBest, saveBest } from '../app/game/persistence';
 import { AutorooSimulation } from '../app/game/simulation';
 
@@ -12,25 +12,21 @@ describe('keyboard input buffering', () => {
     expect(input.consume().laneDelta).toBe(0);
   });
 
-  it('keeps acceleration and Space active while they are held', () => {
+  it('keeps Space active while held without generating repeated taps', () => {
     const input = new InputBuffer();
-    input.setAutoAccelerate(false);
-    input.keyDown('ArrowUp');
     input.keyDown('Space');
     expect(input.consume()).toMatchObject({
-      accelerate: true,
       jumpPressed: true,
+      jumpTapped: true,
     });
     expect(input.consume()).toMatchObject({
-      accelerate: true,
       jumpPressed: true,
+      jumpTapped: false,
     });
     input.keyDown('Space', true);
     expect(input.consume().jumpPressed).toBe(true);
     input.keyUp('Space');
     expect(input.consume().jumpPressed).toBe(false);
-    input.keyUp('ArrowUp');
-    expect(input.consume().accelerate).toBe(false);
   });
 
   it('preserves one jump when Space is tapped between fixed ticks', () => {
@@ -41,7 +37,7 @@ describe('keyboard input buffering', () => {
     expect(input.consume().jumpPressed).toBe(false);
   });
 
-  it('automatically drives on desktop, brakes with Down, and resumes after release', () => {
+  it('always drives on desktop and ignores the former speed-control keys', () => {
     const input = new InputBuffer();
     const run = new AutorooSimulation(0xa770_2026);
     run.start();
@@ -51,12 +47,14 @@ describe('keyboard input buffering', () => {
     expect(driving.speedMps).toBeGreaterThan(0);
 
     input.keyDown('ArrowDown');
+    expect(isGameKey('ArrowDown')).toBe(false);
+    expect(isGameKey('ArrowUp')).toBe(false);
     for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
-    const brakingSpeed = run.snapshot().player.speedMps;
-    expect(brakingSpeed).toBeLessThan(driving.speedMps);
+    const speedWhileDownHeld = run.snapshot().player.speedMps;
+    expect(speedWhileDownHeld).toBeGreaterThan(driving.speedMps);
     input.keyUp('ArrowDown');
     for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
-    expect(run.snapshot().player.speedMps).toBeGreaterThan(brakingSpeed);
+    expect(run.snapshot().player.speedMps).toBeGreaterThan(speedWhileDownHeld);
 
     input.keyDown('ArrowRight');
     input.keyDown('Space');

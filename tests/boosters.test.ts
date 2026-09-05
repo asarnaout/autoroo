@@ -12,6 +12,7 @@ import {
 } from '../app/game/boosters';
 import {
   EMPTY_INPUT,
+  ACCELERATION_MPS2,
   FIXED_DT,
   LANE_X,
   MAX_SPEED_MPS,
@@ -31,7 +32,7 @@ import {
   runRenderSchedule,
 } from '../app/game/simulation';
 
-const drive: InputFrame = { ...EMPTY_INPUT, accelerate: true };
+const drive: InputFrame = { ...EMPTY_INPUT };
 const tap: InputFrame = { ...drive, jumpPressed: true, jumpTapped: true };
 
 function emptyRun(seed = 17) {
@@ -205,6 +206,10 @@ describe('Boing! double jump', () => {
       }
       expect(ticks * FIXED_DT).toBeGreaterThan(1.6);
       expect(run.renderPlayer.yM).toBe(0);
+      expect(run.renderPlayer.speedMps).toBeCloseTo(
+        Math.min(MAX_SPEED_MPS, run.renderTick * FIXED_DT * ACCELERATION_MPS2),
+        8,
+      );
       expect(run.phaseName).toBe('running');
     },
   );
@@ -276,7 +281,15 @@ describe('Bubble Buddy', () => {
     for (let i = 0; i < 100; i += 1) run.tick(EMPTY_INPUT);
     expect(run.phaseName).toBe('running');
     run.__debugReplaceTraffic([
-      createTrafficVehicle('second-hit', 'test', 'sedan', 'ordinary', 1, 0, 0),
+      createTrafficVehicle(
+        'second-hit',
+        'test',
+        'sedan',
+        'ordinary',
+        1,
+        run.renderPlayer.absoluteZM,
+        0,
+      ),
     ]);
     run.tick(EMPTY_INPUT);
     expect(run.phaseName).toBe('game-over');
@@ -350,7 +363,7 @@ describe('Yeet Rocket', () => {
       ]);
       let maxHeight = 0;
       for (let i = 0; i < ROCKET_DURATION_S / FIXED_DT; i += 1) {
-        run.tick({ ...tap, brake: true, laneDelta: -1 });
+        run.tick({ ...tap, laneDelta: -1 });
         maxHeight = Math.max(maxHeight, run.renderPlayer.yM);
         expect(run.phaseName).toBe('running');
       }

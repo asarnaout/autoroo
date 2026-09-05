@@ -24,9 +24,7 @@ type CertificateWithManeuverPlan = ChallengeCertificate & {
   readonly maneuverPlan?: readonly ManeuverPlanRow[];
 };
 
-export const ACCELERATE_INPUT: InputFrame = Object.freeze({
-  accelerate: true,
-  brake: false,
+export const NO_CONTROLS: InputFrame = Object.freeze({
   laneDelta: 0,
   jumpPressed: false,
 });
@@ -133,8 +131,6 @@ export function certificateBotInput(
       laneDelta = commandOrigin < targetLane ? 1 : -1;
     }
     return {
-      accelerate: localTick >= 45,
-      brake: false,
       laneDelta,
       // Mirrors a player holding Space: the production simulation ignores the
       // input in the air and immediately takes off again after each landing.
@@ -150,7 +146,7 @@ export function certificateBotInput(
     snapshot.player.lane !== ground.targetLane &&
     snapshot.player.queuedLane !== ground.targetLane
   ) {
-    if (snapshot.player.laneChangeDirection !== 0) return ACCELERATE_INPUT;
+    if (snapshot.player.laneChangeDirection !== 0) return NO_CONTROLS;
     const nextLane = (
       snapshot.player.lane < ground.targetLane
         ? snapshot.player.lane + 1
@@ -162,11 +158,11 @@ export function certificateBotInput(
         Math.abs(vehicle.absoluteZM - snapshot.player.absoluteZM) <=
           1.8 + vehicle.lengthM / 2 + 0.25,
     );
-    if (!laneChangeClear) return ACCELERATE_INPUT;
+    if (!laneChangeClear) return NO_CONTROLS;
     return {
-      ...ACCELERATE_INPUT,
+      ...NO_CONTROLS,
       laneDelta: snapshot.player.lane < ground.targetLane ? 1 : -1,
     };
   }
-  return ACCELERATE_INPUT;
+  return NO_CONTROLS;
 }

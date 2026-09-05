@@ -1,7 +1,5 @@
 import {
   ACCELERATION_MPS2,
-  BRAKING_MPS2,
-  COAST_DRAG_MPS2,
   FIXED_DT,
   GATE_APPROACH_CLEAR_M,
   GATE_FORWARD_STEADY_M,
@@ -101,20 +99,12 @@ interface GateWindowMath {
   readonly inputWindowS: number;
 }
 
-interface MutableRearState {
-  slowTimeS: number;
-  recoveryTimeS: number;
-  rearPackActive: boolean;
-  rearWarning: boolean;
-}
-
 interface MutableWorldState {
   readonly seed: number;
   tickNumber: number;
   player: PlayerState;
   traffic: TrafficVehicle[];
   bonusScore: number;
-  rear: MutableRearState;
 }
 
 interface GateCandidate {
@@ -155,11 +145,8 @@ type GateWitnessControl = 'canonical' | 'no-jump' | 'fixed-lane';
 
 const WORLD_JUMPED = 1 << 0;
 const WORLD_CRASHED = 1 << 1;
-const WORLD_REAR_SPAWNED = 1 << 2;
-const WORLD_REAR_RETIRED = 1 << 3;
 const MAX_PENDING_EVENTS = 64;
 const MAX_WITNESS_TICKS = Math.round(GATE_WITNESS_LIMIT_S / FIXED_DT);
-const TRANSITION_REAR_GRACE_S = 2;
 const MAX_GATE_ROWS = 20;
 
 function quantize(value: number): number {
@@ -461,19 +448,10 @@ export function advancePlayerPhysics(
   player.previousYM = player.yM;
 
   if (!player.airborne) {
-    if (input.brake) {
-      player.speedMps = Math.max(0, player.speedMps - BRAKING_MPS2 * FIXED_DT);
-    } else if (input.accelerate) {
-      player.speedMps = Math.min(
-        MAX_SPEED_MPS,
-        player.speedMps + ACCELERATION_MPS2 * FIXED_DT,
-      );
-    } else {
-      player.speedMps = Math.max(
-        0,
-        player.speedMps - COAST_DRAG_MPS2 * FIXED_DT,
-      );
-    }
+    player.speedMps = Math.min(
+      MAX_SPEED_MPS,
+      player.speedMps + ACCELERATION_MPS2 * FIXED_DT,
+    );
     if (input.jumpPressed) {
       player.airborne = true;
       player.takeoffSpeedMps = player.speedMps;
@@ -500,7 +478,13 @@ export function advancePlayerPhysics(
       player.yM = 0;
       player.previousYM = Math.max(0, player.previousYM);
       player.verticalSpeedMps = 0;
-      player.speedMps = player.takeoffSpeedMps;
+      // Keep each flight's forward speed fixed, then apply the acceleration
+      // earned in the air so holding jump cannot keep the run at a crawl.
+      player.speedMps = Math.min(
+        MAX_SPEED_MPS,
+        player.takeoffSpeedMps +
+          ACCELERATION_MPS2 * Math.max(0, player.jumpElapsedS - FIXED_DT),
+      );
     }
   }
   player.maxForwardM = Math.max(player.maxForwardM, player.absoluteZM);
@@ -587,24 +571,6 @@ function sweptVerticalClearanceM(
       playerHeightDuringSweep(player, interval[1]),
     ) - vehicle.heightM
   );
-}
-
-function chaseRearVehicles(
-  rear: TrafficVehicle[],
-  player: PlayerState,
-  difficulty: number,
-): void {
-  const desiredClosingMps = Math.min(6, 3.8 + difficulty * 2.2);
-  for (const vehicle of rear) {
-    if (vehicle.role !== 'rear-pressure') continue;
-    vehicle.previousZM = vehicle.absoluteZM;
-    vehicle.speedMps = Math.max(
-      vehicle.speedMps,
-      player.speedMps + desiredClosingMps,
-    );
-    vehicle.speedMps = Math.min(player.speedMps + 6, vehicle.speedMps);
-    vehicle.absoluteZM += vehicle.speedMps * FIXED_DT;
-  }
 }
 
 function makePlayer(): PlayerState {
@@ -738,8 +704,6 @@ function canonicalCertificate(
       point.zMM,
       point.yMM,
       point.speedMMps,
-      point.input.accelerate,
-      point.input.brake,
       point.input.laneDelta,
       point.input.jumpPressed,
     ]),
@@ -762,10 +726,6 @@ function hashLockedWorld(world: MutableWorldState): string {
       canonicalPlayer(world.player),
       canonicalTraffic(world.traffic),
       world.bonusScore,
-      exactNumber(world.rear.slowTimeS),
-      exactNumber(world.rear.recoveryTimeS),
-      world.rear.rearPackActive,
-      world.rear.rearWarning,
     ]),
   );
 }
@@ -860,7 +820,6 @@ function cloneWorld(world: MutableWorldState): MutableWorldState {
     player: clonePlayer(world.player),
     traffic: world.traffic.map(cloneTraffic),
     bonusScore: world.bonusScore,
-    rear: { ...world.rear },
   };
 }
 
@@ -957,69 +916,7 @@ function enforceActiveLaneTarget(player: PlayerState, mask: number): void {
   beginLaneChange(player, nearestActiveLane(mask, player.lane));
 }
 
-function spawnRearPackInto(world: MutableWorldState): void {
-  const lanes = activeLanes(laneMaskAt(world.seed, world.player.absoluteZM));
-  const encounterId = `rear-${world.tickNumber}`;
-  for (const lane of lanes.slice(0, RENDER_POOL_LIMITS.rearCars)) {
-    world.traffic.push(
-      createTrafficVehicle(
-        `${encounterId}-${lane}`,
-        encounterId,
-        'sedan',
-        'rear-pressure',
-        lane,
-        world.player.absoluteZM - 36,
-        world.player.speedMps + 6,
-      ),
-    );
-  }
-  world.rear.rearPackActive = true;
-  world.rear.rearWarning = true;
-  world.rear.recoveryTimeS = 0;
-}
-
-function updateRearPressureState(world: MutableWorldState): number {
-  const difficulty = difficultyAt(world.player.maxForwardM);
-  const lowThreshold = lerp(6, 14, difficulty);
-  const delayS = lerp(8, 5, difficulty);
-  const recoveryThreshold = lerp(8, 18, difficulty);
-  const transition =
-    roadModuleForDistance(world.seed, world.player.absoluteZM).transition !==
-    null;
-
-  if (!world.rear.rearPackActive) {
-    if (world.player.speedMps < lowThreshold) world.rear.slowTimeS += FIXED_DT;
-    else world.rear.slowTimeS = 0;
-    world.rear.rearWarning = world.rear.slowTimeS >= Math.max(0, delayS - 2);
-    const transitionGraceElapsed =
-      world.rear.slowTimeS >= delayS + TRANSITION_REAR_GRACE_S;
-    if (
-      world.rear.slowTimeS >= delayS &&
-      (!transition || transitionGraceElapsed)
-    ) {
-      spawnRearPackInto(world);
-      return WORLD_REAR_SPAWNED;
-    }
-    return 0;
-  }
-
-  world.rear.rearWarning = true;
-  if (world.player.speedMps >= recoveryThreshold)
-    world.rear.recoveryTimeS += FIXED_DT;
-  else world.rear.recoveryTimeS = 0;
-  if (world.rear.recoveryTimeS < 1) return 0;
-  for (let index = world.traffic.length - 1; index >= 0; index -= 1) {
-    if (world.traffic[index].role === 'rear-pressure')
-      world.traffic.splice(index, 1);
-  }
-  world.rear.rearPackActive = false;
-  world.rear.rearWarning = false;
-  world.rear.slowTimeS = 0;
-  world.rear.recoveryTimeS = 0;
-  return WORLD_REAR_RETIRED;
-}
-
-/** Shared player/traffic/rear transition used by live play and witnesses. */
+/** Shared player/traffic transition used by live play and witnesses. */
 function stepWorld(
   world: MutableWorldState,
   input: InputFrame,
@@ -1033,7 +930,6 @@ function stepWorld(
   let outcome = !wasAirborne && world.player.airborne ? WORLD_JUMPED : 0;
 
   for (const vehicle of world.traffic) {
-    if (vehicle.role === 'rear-pressure') continue;
     vehicle.previousZM = vehicle.absoluteZM;
     const nextZM = vehicle.absoluteZM + vehicle.speedMps * FIXED_DT;
     vehicle.absoluteZM =
@@ -1041,11 +937,6 @@ function stepWorld(
         ? nextZM
         : Math.min(nextZM, vehicle.retireAtZM);
   }
-  chaseRearVehicles(
-    world.traffic,
-    world.player,
-    difficultyAt(world.player.maxForwardM),
-  );
 
   const newMask = laneMaskAt(world.seed, world.player.absoluteZM);
   if (!boosts?.rocket) enforceActiveLaneTarget(world.player, newMask);
@@ -1061,7 +952,6 @@ function stepWorld(
       return outcome;
     }
   }
-  if (!boosts?.rocket) outcome |= updateRearPressureState(world);
   world.tickNumber += 1;
   return outcome;
 }
@@ -1099,10 +989,6 @@ function witnessInput(
     laneDelta = commandOrigin < targetLane ? 1 : -1;
   }
   return {
-    // Target speeds are player guidance; full acceleration provides the
-    // reaction margin needed to clear a moving gate within twenty seconds.
-    accelerate: localTick >= 45,
-    brake: false,
     laneDelta,
     jumpPressed:
       jumpTick !== null &&
@@ -1115,7 +1001,7 @@ function traceHash(witness: readonly WitnessTracePoint[]): string {
     witness
       .map(
         (point) =>
-          `${point.tick},${point.lane},${point.xMM},${point.zMM},${point.yMM},${point.speedMMps},${Number(point.input.accelerate)},${Number(point.input.brake)},${point.input.laneDelta},${Number(point.input.jumpPressed)}`,
+          `${point.tick},${point.lane},${point.xMM},${point.zMM},${point.yMM},${point.speedMMps},${point.input.laneDelta},${Number(point.input.jumpPressed)}`,
       )
       .join('|'),
   );
@@ -1163,10 +1049,6 @@ function certifyGate(
   tick: number,
   player: PlayerState,
   traffic: readonly TrafficVehicle[],
-  slowTimeS: number,
-  recoveryTimeS: number,
-  rearPackActive: boolean,
-  rearWarning: boolean,
   bonusScore: number,
   gateZM: number,
   kind: VehicleKind,
@@ -1214,12 +1096,6 @@ function certifyGate(
     player: clonePlayer(player),
     traffic: traffic.map(cloneTraffic),
     bonusScore,
-    rear: {
-      slowTimeS,
-      recoveryTimeS,
-      rearPackActive,
-      rearWarning,
-    },
   };
   const forwardReservationM = gateForwardReservationM(
     kind,
@@ -1877,8 +1753,6 @@ function simulateGroundWitness(
       laneDelta = commandOrigin < desiredLane ? 1 : -1;
     }
     const input: InputFrame = {
-      accelerate: followingGate || localTick >= 45,
-      brake: false,
       laneDelta,
       jumpPressed:
         followingGate &&
@@ -1965,10 +1839,6 @@ export interface GateCertificationRequest {
   readonly tick?: number;
   readonly player: PlayerState;
   readonly traffic?: readonly TrafficVehicle[];
-  readonly slowTimeS?: number;
-  readonly recoveryTimeS?: number;
-  readonly rearPackActive?: boolean;
-  readonly rearWarning?: boolean;
   readonly bonusScore?: number;
   readonly gateZM: number;
   readonly kind: VehicleKind;
@@ -1991,12 +1861,6 @@ export function certifyJumpGate(
     request.tick ?? 0,
     clonePlayer(request.player),
     request.traffic ?? [],
-    request.slowTimeS ?? 0,
-    request.recoveryTimeS ?? 0,
-    request.rearPackActive ??
-      request.traffic?.some((vehicle) => vehicle.role === 'rear-pressure') ??
-      false,
-    request.rearWarning ?? false,
     request.bonusScore ?? 0,
     request.gateZM,
     request.kind,
@@ -2024,14 +1888,6 @@ export function verifyJumpCertificate(
     player: clonePlayer(request.player),
     traffic: traffic.map(cloneTraffic),
     bonusScore: request.bonusScore ?? 0,
-    rear: {
-      slowTimeS: request.slowTimeS ?? 0,
-      recoveryTimeS: request.recoveryTimeS ?? 0,
-      rearPackActive:
-        request.rearPackActive ??
-        traffic.some((vehicle) => vehicle.role === 'rear-pressure'),
-      rearWarning: request.rearWarning ?? false,
-    },
   };
   const gateMask = laneMaskAt(world.seed, request.gateZM);
   const maneuverPlan = normalizeGateManeuverPlan(
@@ -2059,10 +1915,6 @@ export function verifyJumpCertificate(
     tick,
     world.player,
     world.traffic,
-    world.rear.slowTimeS,
-    world.rear.recoveryTimeS,
-    world.rear.rearPackActive,
-    world.rear.rearWarning,
     world.bonusScore,
     candidate.gateZM,
     candidate.kind,
@@ -2151,12 +2003,6 @@ export class AutorooSimulation {
       player: makePlayer(),
       traffic: [],
       bonusScore: 0,
-      rear: {
-        slowTimeS: 0,
-        recoveryTimeS: 0,
-        rearPackActive: false,
-        rearWarning: false,
-      },
     };
     this.pendingGateZM =
       nudgeGateToSteadyRoad(this.seed, firstGateDistance(this.seed)) ??
@@ -2191,38 +2037,6 @@ export class AutorooSimulation {
 
   private set bonusScore(value: number) {
     this.world.bonusScore = value;
-  }
-
-  private get slowTimeS(): number {
-    return this.world.rear.slowTimeS;
-  }
-
-  private set slowTimeS(value: number) {
-    this.world.rear.slowTimeS = value;
-  }
-
-  private get recoveryTimeS(): number {
-    return this.world.rear.recoveryTimeS;
-  }
-
-  private set recoveryTimeS(value: number) {
-    this.world.rear.recoveryTimeS = value;
-  }
-
-  private get rearPackActive(): boolean {
-    return this.world.rear.rearPackActive;
-  }
-
-  private set rearPackActive(value: boolean) {
-    this.world.rear.rearPackActive = value;
-  }
-
-  private get rearWarning(): boolean {
-    return this.world.rear.rearWarning;
-  }
-
-  private set rearWarning(value: boolean) {
-    this.world.rear.rearWarning = value;
   }
 
   get phaseName(): RunPhase {
@@ -2264,10 +2078,6 @@ export class AutorooSimulation {
     this.forceCurrentEscapeNextEncounter = false;
     this.activeCertificate = null;
     this.groundRoutes.length = 0;
-    this.slowTimeS = 0;
-    this.recoveryTimeS = 0;
-    this.rearPackActive = false;
-    this.rearWarning = false;
     this.events.length = 0;
     this.lastBonusLabel = null;
     this.boosters = makeBoosterState();
@@ -2293,6 +2103,7 @@ export class AutorooSimulation {
       this.boosters.doubleJumpUsedThisFlight = true;
       this.boosters.doubleJumpOriginYM = this.player.yM;
       this.boosters.doubleJumpElapsedS = 0;
+      this.boosters.doubleJumpInitialAirTimeS = this.player.jumpElapsedS;
       this.player.verticalSpeedMps = DOUBLE_JUMP_IMPULSE_MPS;
       this.boosterEffect('boing', 'BOING! Physics has left the chat.', 0.8);
       this.emitEvent({ type: 'double-jump' });
@@ -2307,7 +2118,7 @@ export class AutorooSimulation {
       if (this.boosters.shieldReady) {
         this.boosters.shieldReady = false;
         this.boosters.protectionS = SHIELD_GRACE_S;
-        // The bubble knocks the hit traffic away, even if the player is stopped.
+        // The bubble knocks the hit traffic away without stopping the player.
         // Removing those colliders also prevents a pass bonus for the impact.
         this.world.traffic = this.traffic.filter(
           (vehicle) => !collidesSwept(this.player, vehicle),
@@ -2331,10 +2142,6 @@ export class AutorooSimulation {
     // The final swept segment has been collision-checked and any pass bonus
     // finalized before this immutable taper-boundary retirement.
     retireCompletedOrdinaryTrajectories(this.world);
-    if ((outcome & WORLD_REAR_SPAWNED) !== 0) {
-      this.emitEvent({ type: 'warning' });
-      this.emitEvent({ type: 'horn' });
-    }
     this.cullBehind();
     if (enhancedFlight) {
       // Enhanced arcs cannot use normal-jump witnesses. Keep the next draft
@@ -2427,7 +2234,7 @@ export class AutorooSimulation {
         this.boosters.doubleJumpReady = true;
         this.boosters.notice = alreadyReady
           ? 'BOING! Already loaded.'
-          : 'BOING! Tap Space again while airborne.';
+          : 'BOING! Tap JUMP (or Space) again while airborne.';
         this.boosters.noticeRemainingS = 3.5;
       } else if (pickup.kind === 'shield') {
         const alreadyReady = this.boosters.shieldReady;
@@ -2456,6 +2263,7 @@ export class AutorooSimulation {
       landingLane,
     };
     this.boosters.doubleJumpOriginYM = null;
+    this.boosters.doubleJumpInitialAirTimeS = 0;
     this.player.airborne = true;
     this.player.queuedLane = null;
     this.player.laneChangeDirection = 0;
@@ -2467,9 +2275,6 @@ export class AutorooSimulation {
       vehicle.locked = false;
       vehicle.certificateId = null;
     }
-    this.rearWarning = false;
-    this.slowTimeS = 0;
-    this.recoveryTimeS = 0;
     this.boosterEffect('rocket', 'YEEET! Next stop: a very soft landing.', 4);
     this.emitEvent({ type: 'rocket-launch' });
   }
@@ -2480,13 +2285,8 @@ export class AutorooSimulation {
     this.boosters.doubleJumpUsedThisFlight = false;
     this.world.traffic = this.traffic.filter(
       (vehicle) =>
-        vehicle.role !== 'rear-pressure' &&
         vehicle.absoluteZM > this.player.absoluteZM + ROCKET_LANDING_CLEAR_M,
     );
-    this.rearPackActive = false;
-    this.rearWarning = false;
-    this.slowTimeS = 0;
-    this.recoveryTimeS = 0;
     this.encounterCursorM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
     this.lastEscapeLane = this.player.lane;
     this.forceCurrentEscapeNextEncounter = true;
@@ -2550,7 +2350,6 @@ export class AutorooSimulation {
           !fullyPassed ||
           !hasBonus ||
           vehicle.bonusAwarded ||
-          vehicle.role === 'rear-pressure' ||
           (previousAwardedId !== null && vehicle.id <= previousAwardedId)
         ) {
           continue;
@@ -2591,7 +2390,6 @@ export class AutorooSimulation {
       const passedExtentM =
         PLAYER_LENGTH_M / 2 + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
       if (
-        vehicle.role !== 'rear-pressure' &&
         !vehicle.locked &&
         vehicle.absoluteZM < this.player.absoluteZM - passedExtentM
       ) {
@@ -2859,10 +2657,10 @@ export class AutorooSimulation {
           Math.floor(blockingPressure * Math.max(0, candidates.length - 0.01)),
       );
       let currentCars = this.traffic.filter(
-        (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
+        (vehicle) => vehicle.kind !== 'bus',
       ).length;
       let currentBuses = this.traffic.filter(
-        (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind === 'bus',
+        (vehicle) => vehicle.kind === 'bus',
       ).length;
       const activeGateBlockers = this.activeCertificate?.blockerIds.length ?? 0;
       const pendingGateReserve =
@@ -3063,7 +2861,7 @@ export class AutorooSimulation {
         targetLane: route.certificate.targetLane,
       }));
     const currentFrontCars = this.traffic.filter(
-      (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
+      (vehicle) => vehicle.kind !== 'bus',
     ).length;
     // Every attempt is a sustained mixed chain. A failed proof degrades to a
     // dense ordinary row; it never silently substitutes the old one-row gate.
@@ -3107,10 +2905,6 @@ export class AutorooSimulation {
         this.tickNumber,
         this.player,
         this.traffic,
-        this.slowTimeS,
-        this.recoveryTimeS,
-        this.rearPackActive,
-        this.rearWarning,
         this.bonusScore,
         this.pendingGateZM,
         kind,
@@ -3204,7 +2998,6 @@ export class AutorooSimulation {
       difficulty: difficultyAt(this.player.maxForwardM),
       laneMask: mask,
       laneCount: countLanes(mask),
-      rearWarning: this.rearWarning,
       activeCertificate: this.activeCertificate,
       lastBonusLabel: this.lastBonusLabel,
     };
@@ -3275,14 +3068,6 @@ export class AutorooSimulation {
   __debugReplaceTraffic(vehicles: readonly TrafficVehicle[]): void {
     this.traffic.length = 0;
     for (const vehicle of vehicles) this.traffic.push(cloneTraffic(vehicle));
-    this.rearPackActive = vehicles.some(
-      (vehicle) => vehicle.role === 'rear-pressure',
-    );
-  }
-
-  /** Deterministic harness hook used only by the unit/stress tests. */
-  __debugSetRearState(patch: Partial<MutableRearState>): void {
-    Object.assign(this.world.rear, patch);
   }
 
   /** Deterministic harness hook used only by the unit tests. */
@@ -3327,21 +3112,17 @@ export class AutorooSimulation {
   debugRetainedCounts(): Readonly<{
     frontCars: number;
     buses: number;
-    rearCars: number;
     totalTraffic: number;
     groundCertificates: number;
     activeCertificates: number;
     witnessPoints: number;
     pendingEvents: number;
   }> {
-    const rearCars = this.traffic.filter(
-      (vehicle) => vehicle.role === 'rear-pressure',
-    ).length;
     const buses = this.traffic.filter(
-      (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind === 'bus',
+      (vehicle) => vehicle.kind === 'bus',
     ).length;
     const frontCars = this.traffic.filter(
-      (vehicle) => vehicle.role !== 'rear-pressure' && vehicle.kind !== 'bus',
+      (vehicle) => vehicle.kind !== 'bus',
     ).length;
     let witnessPoints = this.activeCertificate?.witness.length ?? 0;
     for (const route of this.groundRoutes)
@@ -3349,7 +3130,6 @@ export class AutorooSimulation {
     return {
       frontCars,
       buses,
-      rearCars,
       totalTraffic: this.traffic.length,
       groundCertificates: this.groundRoutes.length,
       activeCertificates: this.activeCertificate ? 1 : 0,

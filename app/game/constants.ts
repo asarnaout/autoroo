@@ -12,7 +12,6 @@ export const ROAD_SIDEWALK_WIDTH_M = 1.15;
 export const RENDER_POOL_LIMITS = Object.freeze({
   frontCars: 40,
   buses: 16,
-  rearCars: 4,
   roadTiles: 16,
 });
 
@@ -23,8 +22,6 @@ export const TRAFFIC_PREGEN_AHEAD_M = 305;
 
 export const MAX_SPEED_MPS = 36;
 export const ACCELERATION_MPS2 = 8;
-export const BRAKING_MPS2 = 14;
-export const COAST_DRAG_MPS2 = 0.35;
 export const PLAYER_WIDTH_M = 1.9;
 export const LATERAL_COLLISION_MARGIN_M = 0.1;
 export const LANE_CHANGE_TICKS = 12;
@@ -63,8 +60,6 @@ export const VEHICLE_DIMENSIONS: Readonly<
 };
 
 export const EMPTY_INPUT = Object.freeze({
-  accelerate: false,
-  brake: false,
   laneDelta: 0,
   jumpPressed: false,
 } as const);

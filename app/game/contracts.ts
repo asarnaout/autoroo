@@ -2,7 +2,7 @@ export type LaneIndex = 0 | 1 | 2 | 3;
 export type LaneMask = number;
 export type RunPhase = 'ready' | 'running' | 'paused' | 'game-over';
 export type VehicleKind = 'sedan' | 'suv' | 'bus';
-export type VehicleRole = 'ordinary' | 'gate' | 'rear-pressure';
+export type VehicleRole = 'ordinary' | 'gate';
 export type BoosterKind = 'boing' | 'rocket' | 'shield';
 
 export interface BoosterPickup {
@@ -29,6 +29,8 @@ export interface BoosterState {
   protectionS: number;
   doubleJumpOriginYM: number | null;
   doubleJumpElapsedS: number;
+  /** Normal-jump airtime before switching to the custom booster arc. */
+  doubleJumpInitialAirTimeS: number;
   doubleJumpUsedThisFlight: boolean;
   rocket: RocketFlight | null;
   effect: 'boing' | 'rocket' | 'shield-pop' | 'landing' | null;
@@ -38,8 +40,6 @@ export interface BoosterState {
 }
 
 export interface InputFrame {
-  readonly accelerate: boolean;
-  readonly brake: boolean;
   readonly laneDelta: -1 | 0 | 1;
   readonly jumpPressed: boolean;
   /** Fresh physical press only; held auto-hop must not spend a booster. */
@@ -183,7 +183,6 @@ export interface RunSnapshot {
   readonly difficulty: number;
   readonly laneMask: LaneMask;
   readonly laneCount: number;
-  readonly rearWarning: boolean;
   readonly activeCertificate: ChallengeCertificate | null;
   readonly lastBonusLabel: string | null;
 }
@@ -208,6 +207,5 @@ export type GameEvent =
   | { readonly type: 'jump' }
   | { readonly type: 'lane-change' }
   | { readonly type: 'warning' }
-  | { readonly type: 'horn' }
   | { readonly type: 'crash' }
   | { readonly type: 'bonus'; readonly label: string; readonly points: number };

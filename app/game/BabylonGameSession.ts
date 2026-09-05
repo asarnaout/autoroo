@@ -211,7 +211,6 @@ export class BabylonGameSession {
   private readonly sedanPool: VisualEntry[] = [];
   private readonly suvPool: VisualEntry[] = [];
   private readonly busPool: VisualEntry[] = [];
-  private readonly rearPool: VisualEntry[] = [];
   private readonly sceneryPool: (SceneryEntry | null)[] = [];
   private readonly streetlightPool: StreetlightEntry[] = [];
   private readonly transitionSigns: TransformNode[] = [];
@@ -1257,15 +1256,6 @@ export class BabylonGameSession {
       );
       if (bus) this.busPool.push(bus);
     }
-    for (let index = 0; index < RENDER_POOL_LIMITS.rearCars; index += 1) {
-      const rear = this.instantiate(
-        MODEL_CONFIGS.sedan,
-        `rear-${index}`,
-        'sedan',
-        true,
-      );
-      if (rear) this.rearPool.push(rear);
-    }
     for (
       let stationSlot = 0;
       stationSlot < BUILDING_STATION_POOL_SIZE;
@@ -1448,11 +1438,9 @@ export class BabylonGameSession {
     let sedanIndex = 0;
     let suvIndex = 0;
     let busIndex = 0;
-    let rearIndex = 0;
     for (const vehicle of this.simulation.renderTraffic) {
       let entry: VisualEntry | undefined;
-      if (vehicle.role === 'rear-pressure') entry = this.rearPool[rearIndex++];
-      else if (vehicle.kind === 'bus') entry = this.busPool[busIndex++];
+      if (vehicle.kind === 'bus') entry = this.busPool[busIndex++];
       else if (vehicle.kind === 'suv') {
         if (suvIndex < this.suvPool.length) entry = this.suvPool[suvIndex++];
         else if (sedanIndex < this.sedanPool.length)
@@ -1474,9 +1462,6 @@ export class BabylonGameSession {
     }
     for (let index = busIndex; index < this.busPool.length; index += 1) {
       setVisible(this.busPool[index], false);
-    }
-    for (let index = rearIndex; index < this.rearPool.length; index += 1) {
-      setVisible(this.rearPool[index], false);
     }
   }
 

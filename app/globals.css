@@ -539,27 +539,6 @@ button {
   line-height: 1.5;
 }
 
-.rear-warning {
-  position: absolute;
-  z-index: 12;
-  border: 3px solid #142b3c;
-  box-shadow: 0 5px 0 rgb(20 43 60 / 25%);
-  font-weight: 1000;
-  letter-spacing: 0.04em;
-  pointer-events: none;
-}
-
-.rear-warning {
-  bottom: 104px;
-  left: 50%;
-  transform: translateX(-50%);
-  border-radius: 13px;
-  padding: 8px 12px;
-  background: #ff5f57;
-  color: white;
-  font-size: 0.75rem;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -704,18 +683,6 @@ button {
   outline: 3px solid #fff5d6;
   outline-offset: 4px;
 }
-.touch-brake {
-  grid-column: 1 / -1;
-  min-height: 44px;
-  flex-direction: row;
-  gap: 7px;
-  border-radius: 14px;
-}
-.touch-brake svg {
-  width: 20px;
-  height: 20px;
-  color: #ffb6a6;
-}
 .touch-jump {
   width: 112px;
   height: 112px;
@@ -791,13 +758,6 @@ button {
 [data-touch='true'] .booster-notice {
   top: calc(max(12px, env(safe-area-inset-top)) + 116px);
 }
-[data-touch='true'] .rear-warning {
-  bottom: calc(192px + env(safe-area-inset-bottom));
-  max-width: calc(100% - 32px);
-  width: max-content;
-  text-align: center;
-  font-size: 12px;
-}
 @media (max-width: 380px) {
   .hud-top {
     gap: 4px;
@@ -826,16 +786,9 @@ button {
   .touch-button {
     min-height: 54px;
   }
-  .touch-brake {
-    min-height: 44px;
-  }
   .touch-jump {
     width: 100px;
     height: 100px;
-  }
-  [data-touch='true'] .rear-warning {
-    bottom: 50px;
-    max-width: 40%;
   }
 }
 

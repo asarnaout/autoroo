@@ -86,7 +86,6 @@ const INITIAL_SNAPSHOT: RunSnapshot = {
   difficulty: 0,
   laneMask: INITIAL_LANE_MASK,
   laneCount: countLanes(INITIAL_LANE_MASK),
-  rearWarning: false,
   activeCertificate: null,
   lastBonusLabel: null,
 };
@@ -104,7 +103,6 @@ function statusPayload(snapshot: RunSnapshot, best: number) {
     speedMetresPerSecond: Number(snapshot.player.speedMps.toFixed(2)),
     lane: snapshot.player.lane + 1,
     activeLanes: snapshot.laneCount,
-    rearPressureWarning: snapshot.rearWarning,
     jumpGateVisible: snapshot.activeCertificate?.kind === 'jump',
     doubleJumpReady: snapshot.boosters.doubleJumpReady,
     shieldReady: snapshot.boosters.shieldReady,
@@ -579,10 +577,6 @@ export function AutorooApp() {
                   <span>Flip lanes</span>
                 </span>
                 <span className="start-control">
-                  <Kbd>↓</Kbd>
-                  <span>Brake</span>
-                </span>
-                <span className="start-control">
                   <Kbd className="space-key">Space</Kbd>
                   <span>Jump</span>
                 </span>
@@ -637,12 +631,6 @@ export function AutorooApp() {
             press <Kbd>Enter</Kbd> or <Kbd>R</Kbd>
           </p>
         </section>
-      )}
-
-      {isPlaying && snapshot.rearWarning && (
-        <div className="rear-warning" role="alert">
-          TRAFFIC CATCHING UP — RELEASE BRAKE
-        </div>
       )}
 
       <div className="sr-only" aria-live="polite" aria-atomic="true">

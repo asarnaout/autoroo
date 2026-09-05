@@ -23,7 +23,6 @@ export const ROCKET_DISTANCE_M = 480;
 export const ROCKET_HEIGHT_M = 26;
 export const ROCKET_BONUS = 750;
 export const SHIELD_GRACE_S = 1.5;
-export const ROCKET_LANDING_CLEAR_M = 90;
 
 export const BOOSTER_INFO = {
   boing: {
@@ -36,7 +35,7 @@ export const BOOSTER_INFO = {
     name: 'Yeet Rocket',
     rarity: 'Rare',
     color: '#ff9861',
-    instruction: 'Auto-launch! Fly 480 m, land safely, earn +750.',
+    instruction: 'Auto-launch! Steer midair, dodge traffic, and land for +750.',
   },
   shield: {
     name: 'Bubble Buddy',
@@ -121,7 +120,7 @@ export function collectsBooster(
   return true;
 }
 
-/** Returns true when booster physics handled the entire player step. */
+/** Handles forward/vertical flight; lateral movement uses normal lane changes. */
 export function advanceBoosterFlight(
   player: PlayerState,
   boosts: BoosterState,
@@ -133,14 +132,10 @@ export function advanceBoosterFlight(
   // Custom arcs use linear per-tick swept heights, not the normal jump parabola.
   player.jumpElapsedS = 0;
   if (rocket) {
-    player.previousXM = player.xM;
     rocket.elapsedS = Math.min(ROCKET_DURATION_S, rocket.elapsedS + FIXED_DT);
     const t = rocket.elapsedS / ROCKET_DURATION_S;
-    const smooth = t * t * (3 - 2 * t);
     player.absoluteZM =
       rocket.startZM + (rocket.landingZM - rocket.startZM) * t;
-    player.xM =
-      rocket.startXM + (LANE_X[rocket.landingLane] - rocket.startXM) * smooth;
     player.yM = rocket.startYM * (1 - t) + 4 * ROCKET_HEIGHT_M * t * (1 - t);
     player.verticalSpeedMps =
       (-rocket.startYM + 4 * ROCKET_HEIGHT_M * (1 - 2 * t)) / ROCKET_DURATION_S;
@@ -148,12 +143,6 @@ export function advanceBoosterFlight(
     player.takeoffSpeedMps = player.speedMps;
     player.airborne = true;
     if (t >= 1 - 1e-9) {
-      player.lane = rocket.landingLane;
-      player.xM = LANE_X[player.lane];
-      player.laneChangeStartXM = player.xM;
-      player.laneChangeElapsedS = 0;
-      player.laneChangeDirection = 0;
-      player.queuedLane = null;
       player.airborne = false;
       player.yM = 0;
       player.verticalSpeedMps = 0;

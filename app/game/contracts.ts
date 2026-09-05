@@ -16,10 +16,8 @@ export interface BoosterPickup {
 export interface RocketFlight {
   elapsedS: number;
   readonly startZM: number;
-  readonly startXM: number;
   readonly startYM: number;
   readonly landingZM: number;
-  readonly landingLane: LaneIndex;
 }
 
 export interface BoosterState {

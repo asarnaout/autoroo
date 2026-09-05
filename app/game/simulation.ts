@@ -40,6 +40,7 @@ import type {
   InputFrame,
   LaneIndex,
   PlayerState,
+  RocketFlight,
   RunPhase,
   RunSnapshot,
   TrafficVehicle,
@@ -65,7 +66,6 @@ import {
   BOOSTER_SPACING_M,
   ROCKET_DISTANCE_M,
   ROCKET_BONUS,
-  ROCKET_LANDING_CLEAR_M,
   SHIELD_GRACE_S,
   DOUBLE_JUMP_IMPULSE_MPS,
   advanceBoosterFlight,
@@ -922,7 +922,7 @@ function stepWorld(
   input: InputFrame,
   boosts?: BoosterState,
 ): number {
-  if (!boosts?.rocket) applyInputLane(world.player, input, world.seed);
+  applyInputLane(world.player, input, world.seed);
   const wasAirborne = world.player.airborne;
   if (!boosts || !advanceBoosterFlight(world.player, boosts)) {
     advancePlayerPhysics(world.player, input);
@@ -939,11 +939,10 @@ function stepWorld(
   }
 
   const newMask = laneMaskAt(world.seed, world.player.absoluteZM);
-  if (!boosts?.rocket) enforceActiveLaneTarget(world.player, newMask);
+  enforceActiveLaneTarget(world.player, newMask);
 
   for (const vehicle of world.traffic) {
     if (
-      !boosts?.rocket &&
       !(boosts && boosts.protectionS > 0) &&
       collidesSwept(world.player, vehicle)
     ) {
@@ -1707,8 +1706,17 @@ function simulateGroundWitness(
   draftedBlockers: readonly TrafficVehicle[],
   routeTargets: ReadonlyMap<string, LaneIndex>,
   activeCertificate: ChallengeCertificate | null = null,
+  rocketFlight: Readonly<RocketFlight> | null = null,
 ): WitnessResult {
   const world = cloneWorld(revealWorld);
+  // Prove the same flight/landing the player will experience, without relying
+  // on an optional shield or changing the live rocket timer.
+  const boosts: BoosterState | undefined = rocketFlight
+    ? {
+        ...makeBoosterState(),
+        rocket: { ...rocketFlight },
+      }
+    : undefined;
   const newEncounterId = draftedBlockers[0]?.encounterId ?? '';
   const blockerIds = new Set(draftedBlockers.map((vehicle) => vehicle.id));
   const passedBlockerIds = new Set<string>();
@@ -1765,7 +1773,8 @@ function simulateGroundWitness(
           ),
     };
     const inputTick = world.tickNumber;
-    const outcome = stepWorld(world, input);
+    const outcome = stepWorld(world, input, boosts);
+    if (boosts?.rocket && !world.player.airborne) boosts.rocket = null;
     if (localTick % LANE_COMMAND_INTERVAL_TICKS === 0 || laneDelta !== 0) {
       witness.push({
         tick: inputTick,
@@ -2143,9 +2152,8 @@ export class AutorooSimulation {
     // finalized before this immutable taper-boundary retirement.
     retireCompletedOrdinaryTrajectories(this.world);
     this.cullBehind();
-    if (enhancedFlight) {
-      // Enhanced arcs cannot use normal-jump witnesses. Keep the next draft
-      // behind the fog while certification waits for an ordinary physics state.
+    if (enhancedFlight && !this.boosters.rocket) {
+      // Boing arcs wait for ordinary physics before normal-jump certification.
       this.encounterCursorM = Math.max(
         this.encounterCursorM,
         this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M,
@@ -2159,7 +2167,11 @@ export class AutorooSimulation {
       }
     }
     if (this.boosters.rocket && !this.player.airborne) this.finishRocket();
-    if (!this.boosters.rocket && this.boosters.doubleJumpOriginYM === null) {
+    if (this.boosters.rocket) {
+      // Continue ordinary traffic using rocket-aware route proofs. New rows
+      // still appear beyond the fog; the landing area is never cleared.
+      this.fillAhead();
+    } else if (this.boosters.doubleJumpOriginYM === null) {
       this.advanceGateLifecycle();
       this.fillAhead();
       this.tryRevealGate();
@@ -2252,22 +2264,15 @@ export class AutorooSimulation {
 
   private launchRocket(): void {
     const landingZM = this.player.absoluteZM + ROCKET_DISTANCE_M;
-    // Inner lanes persist through every topology transition.
-    const landingLane: LaneIndex = this.player.xM < 0 ? 1 : 2;
     this.boosters.rocket = {
       elapsedS: 0,
       startZM: this.player.absoluteZM,
-      startXM: this.player.xM,
       startYM: this.player.yM,
       landingZM,
-      landingLane,
     };
     this.boosters.doubleJumpOriginYM = null;
     this.boosters.doubleJumpInitialAirTimeS = 0;
     this.player.airborne = true;
-    this.player.queuedLane = null;
-    this.player.laneChangeDirection = 0;
-    this.player.laneChangeElapsedS = 0;
     this.activeCertificate = null;
     this.groundRoutes.length = 0;
     // Keep the visible traffic, but release the skipped challenge's locks.
@@ -2275,23 +2280,23 @@ export class AutorooSimulation {
       vehicle.locked = false;
       vehicle.certificateId = null;
     }
-    this.boosterEffect('rocket', 'YEEET! Next stop: a very soft landing.', 4);
+    // Release the skipped gate's reservation now so ordinary traffic can keep
+    // flowing through the flight and landing. Preserve all visible vehicles.
+    this.encounterCursorM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
+    this.forceCurrentEscapeNextEncounter = false;
+    this.lastGateZM = landingZM;
+    this.scheduleNextGate();
+    this.boosterEffect(
+      'rocket',
+      'YEEET! Steer midair and stick the landing.',
+      4,
+    );
     this.emitEvent({ type: 'rocket-launch' });
   }
 
   private finishRocket(): void {
     this.boosters.rocket = null;
-    this.boosters.protectionS = SHIELD_GRACE_S;
     this.boosters.doubleJumpUsedThisFlight = false;
-    this.world.traffic = this.traffic.filter(
-      (vehicle) =>
-        vehicle.absoluteZM > this.player.absoluteZM + ROCKET_LANDING_CLEAR_M,
-    );
-    this.encounterCursorM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
-    this.lastEscapeLane = this.player.lane;
-    this.forceCurrentEscapeNextEncounter = true;
-    this.lastGateZM = this.player.absoluteZM;
-    this.scheduleNextGate();
     this.bonusScore += ROCKET_BONUS;
     this.boosterEffect('landing', `SPECIAL DELIVERY! +${ROCKET_BONUS}`, 0.65);
     this.emitEvent({ type: 'rocket-land' });
@@ -2741,6 +2746,7 @@ export class AutorooSimulation {
         drafted,
         routeTargets,
         activeCertificate,
+        this.boosters.rocket,
       );
       if (!replay.success) continue;
 
@@ -2763,6 +2769,14 @@ export class AutorooSimulation {
           mask,
           escapeLane,
           activeCertificate ? canonicalCertificate(activeCertificate) : null,
+          this.boosters.rocket
+            ? [
+                exactNumber(this.boosters.rocket.elapsedS),
+                exactNumber(this.boosters.rocket.startZM),
+                exactNumber(this.boosters.rocket.startYM),
+                exactNumber(this.boosters.rocket.landingZM),
+              ]
+            : null,
           blockerTrajectories.map((trajectory) => [
             trajectory.id,
             trajectory.encounterId,

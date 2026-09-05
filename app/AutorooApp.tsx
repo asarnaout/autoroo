@@ -721,8 +721,8 @@ function BoostersDialog() {
         })}
         <p className="credits-footnote">
           Boing! works even while falling. Release JUMP (or Space) and press
-          again to use it. Holding JUMP keeps hopping after landing. Rockets
-          handle the steering until touchdown.
+          again to use it. Holding JUMP keeps hopping after landing. Steer
+          during a rocket flight to choose your landing lane.
         </p>
       </DialogContent>
     </Dialog>

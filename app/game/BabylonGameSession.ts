@@ -1352,9 +1352,7 @@ export class BabylonGameSession {
     const interpolatedY =
       player.previousYM + (player.yM - player.previousYM) * alpha;
     const boosts = this.simulation.renderBoosters;
-    const lanePose = boosts.rocket
-      ? { liftM: 0, rollRad: Math.sin(boosts.rocket.elapsedS * 24) * 0.035 }
-      : laneChangeAnimationPose(player, alpha);
+    const lanePose = laneChangeAnimationPose(player, alpha);
     // Jump height stays authoritative: flip clearance only fills any missing
     // ground clearance instead of stacking another hop on top of it.
     const visualY = Math.max(interpolatedY, lanePose.liftM);

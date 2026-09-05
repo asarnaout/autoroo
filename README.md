@@ -25,8 +25,9 @@ object pools, while React owns the HUD and menus.
 - **Bubble Buddy** absorbs one collision and knocks the hit vehicles away,
   with 1.5 seconds of recovery protection. Only one shield can be carried.
 - The rare **Yeet Rocket** launches automatically on collection: a four-second,
-  480 m flight over traffic, a guided landing in a persistent inner lane,
-  +750 bonus points, and a clear landing corridor. Steering returns at touchdown.
+  480 m flight with the same midair lane changes and barrel rolls as jumping.
+  Traffic stays on the road, collisions still count, and landing earns +750
+  bonus points. Steer to choose a clear landing lane.
 - Booster candidates alternate between road edges at roughly 90 m intervals. Seeded
   blocks nominate eight springs, three shields, and one rocket; unsafe taper
   locations and mandatory jump-chain regions are skipped. Shields float higher

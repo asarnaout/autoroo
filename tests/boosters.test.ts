@@ -15,7 +15,9 @@ import {
   ACCELERATION_MPS2,
   FIXED_DT,
   LANE_X,
+  LANE_CHANGE_TICKS,
   MAX_SPEED_MPS,
+  TRAFFIC_RENDER_AHEAD_M,
   activeLanes,
   hasLane,
 } from '../app/game/constants';
@@ -26,11 +28,13 @@ import type {
 } from '../app/game/contracts';
 import { laneMaskAt, isSteadyRoadRange } from '../app/game/generator';
 import { InputBuffer } from '../app/game/input';
+import { laneChangeAnimationPose } from '../app/game/laneChangeAnimation';
 import {
   AutorooSimulation,
   createTrafficVehicle,
   runRenderSchedule,
 } from '../app/game/simulation';
+import { certificateBotInput } from './bot-driver';
 
 const drive: InputFrame = { ...EMPTY_INPUT };
 const tap: InputFrame = { ...drive, jumpPressed: true, jumpTapped: true };
@@ -316,56 +320,36 @@ describe('Bubble Buddy', () => {
 });
 
 describe('Yeet Rocket', () => {
+  const flightTicks = Math.round(ROCKET_DURATION_S / FIXED_DT);
+
+  function launchRocket(seed = 17) {
+    const run = emptyRun(seed);
+    const startM = 127;
+    run.__debugSetPlayer({
+      absoluteZM: startM,
+      previousZM: startM,
+      maxForwardM: startM,
+    });
+    run.__debugReplacePickups([pickup('rocket', startM)]);
+    run.tick(drive);
+    return run;
+  }
+
   it.each([0, 17, 55, 444])(
-    'flies fast, preserves inventory and returns control on a clear active lane (seed %i)',
+    'keeps its speed, height, duration and inventory while steering through active lanes (seed %i)',
     (seed) => {
-      const run = emptyRun(seed);
-      const startM = 127;
-      run.__debugSetPlayer({
-        absoluteZM: startM,
-        previousZM: startM,
-        maxForwardM: startM,
-      });
+      const run = launchRocket(seed);
       run.__debugSetBoosters({ doubleJumpReady: true, shieldReady: true });
-      run.__debugReplacePickups([pickup('rocket', startM)]);
-      run.tick(EMPTY_INPUT);
       const launch = run.snapshot();
       expect(launch.boosters.rocket).not.toBeNull();
-      const landingM = launch.boosters.rocket!.landingZM;
-      run.__debugReplaceTraffic([
-        createTrafficVehicle(
-          'takeoff-bus',
-          'test',
-          'bus',
-          'gate',
-          1,
-          startM + 3,
-          0,
-        ),
-        createTrafficVehicle(
-          'landing-bus',
-          'test',
-          'bus',
-          'gate',
-          1,
-          landingM,
-          0,
-        ),
-        createTrafficVehicle(
-          'landing-suv',
-          'test',
-          'suv',
-          'ordinary',
-          2,
-          landingM + 25,
-          0,
-        ),
-      ]);
       let maxHeight = 0;
-      for (let i = 0; i < ROCKET_DURATION_S / FIXED_DT; i += 1) {
-        run.tick({ ...tap, laneDelta: -1 });
+      for (let i = 0; i < flightTicks; i += 1) {
+        clearTick(run, { ...tap, laneDelta: -1 });
         maxHeight = Math.max(maxHeight, run.renderPlayer.yM);
         expect(run.phaseName).toBe('running');
+        expect(hasLane(run.snapshot().laneMask, run.renderPlayer.lane)).toBe(
+          true,
+        );
       }
       const after = run.snapshot();
       expect(maxHeight).toBeGreaterThanOrEqual(ROCKET_HEIGHT_M - 0.1);
@@ -383,33 +367,290 @@ describe('Yeet Rocket', () => {
       expect(after.boosters).toMatchObject({
         doubleJumpReady: true,
         shieldReady: true,
+        protectionS: 0,
       });
-      expect(
-        after.traffic.every((vehicle) => vehicle.absoluteZM > landingM + 90),
-      ).toBe(true);
       expect(after.bonusScore).toBeGreaterThanOrEqual(ROCKET_BONUS);
       expect(
         run.drainEvents().filter((event) => event.type === 'rocket-land'),
       ).toHaveLength(1);
       const previousLane = run.renderPlayer.lane;
-      run.tick({ ...drive, laneDelta: previousLane === 1 ? 1 : -1 });
+      clearTick(run, { ...drive, laneDelta: previousLane <= 1 ? 1 : -1 });
+      // A flip still in progress at touchdown finishes before a queued turn.
+      for (let i = 0; i < LANE_CHANGE_TICKS; i += 1) clearTick(run);
       expect(run.renderPlayer.lane).not.toBe(previousLane);
-      for (let i = 0; i < 120; i += 1) run.tick(drive);
-      expect(run.phaseName).toBe('running');
     },
   );
+
+  it.each(['sedan', 'bus'] as const)(
+    'can crash into a %s during descent without clearing it or awarding a landing',
+    (kind) => {
+      const run = launchRocket();
+      const landingM = run.renderBoosters.rocket!.landingZM;
+      run.__debugReplaceTraffic([
+        createTrafficVehicle(
+          'landing-hit',
+          'test',
+          kind,
+          'ordinary',
+          1,
+          landingM,
+          0,
+        ),
+      ]);
+      for (let i = 0; i < flightTicks && run.phaseName === 'running'; i += 1)
+        run.tick(drive);
+      expect(run.phaseName).toBe('game-over');
+      expect(run.renderBoosters.rocket).not.toBeNull();
+      expect(run.renderPlayer.absoluteZM).toBeLessThan(landingM);
+      expect(
+        run.renderTraffic.some((vehicle) => vehicle.id === 'landing-hit'),
+      ).toBe(true);
+      const events = run.drainEvents();
+      expect(events.filter((event) => event.type === 'crash')).toHaveLength(1);
+      expect(
+        events.filter((event) => event.type === 'rocket-land'),
+      ).toHaveLength(0);
+      expect(
+        events.filter(
+          (event) => event.type === 'bonus' && event.points === ROCKET_BONUS,
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
+  it('lets the player evade landing traffic and keeps nearby cars and collisions after touchdown', () => {
+    const run = launchRocket();
+    const landingM = run.renderBoosters.rocket!.landingZM;
+    run.__debugReplaceTraffic([
+      createTrafficVehicle(
+        'landing-bus',
+        'test',
+        'bus',
+        'gate',
+        1,
+        landingM,
+        0,
+      ),
+      createTrafficVehicle(
+        'nearby-suv',
+        'test',
+        'suv',
+        'ordinary',
+        1,
+        landingM + 25,
+        0,
+      ),
+    ]);
+    for (let i = 0; i < flightTicks; i += 1)
+      run.tick({ ...drive, laneDelta: i === 180 ? 1 : 0 });
+    expect(run.phaseName).toBe('running');
+    expect(run.renderPlayer.lane).toBe(2);
+    expect(run.renderBoosters).toMatchObject({ rocket: null, protectionS: 0 });
+    expect(
+      run.renderTraffic.find((vehicle) => vehicle.id === 'landing-bus')
+        ?.absoluteZM,
+    ).toBe(landingM);
+    expect(
+      run.renderTraffic.find((vehicle) => vehicle.id === 'nearby-suv')
+        ?.absoluteZM,
+    ).toBe(landingM + 25);
+    expect(
+      run.drainEvents().filter((event) => event.type === 'rocket-land'),
+    ).toHaveLength(1);
+    run.__debugReplaceTraffic([
+      createTrafficVehicle(
+        'after-touchdown',
+        'test',
+        'sedan',
+        'ordinary',
+        2,
+        landingM + 3,
+        0,
+      ),
+    ]);
+    run.tick(drive);
+    expect(run.phaseName).toBe('game-over');
+  });
+
+  it('still lets Bubble Buddy absorb a landing collision by consuming the shield', () => {
+    const run = launchRocket();
+    run.__debugSetBoosters({ shieldReady: true });
+    run.__debugReplaceTraffic([
+      createTrafficVehicle(
+        'shield-hit',
+        'test',
+        'bus',
+        'ordinary',
+        1,
+        run.renderBoosters.rocket!.landingZM,
+        0,
+      ),
+    ]);
+    for (let i = 0; i < flightTicks; i += 1) run.tick(drive);
+    expect(run.phaseName).toBe('running');
+    expect(run.renderBoosters.shieldReady).toBe(false);
+    expect(
+      run.drainEvents().filter((event) => event.type === 'shield-pop'),
+    ).toHaveLength(1);
+  });
+
+  it('uses identical lane movement, queued reversals and barrel-roll poses to a normal jump', () => {
+    const rocket = launchRocket();
+    for (let i = 0; i < 100; i += 1) clearTick(rocket);
+    const jump = emptyRun();
+    clearTick(jump, tap);
+    for (let i = 0; i < LANE_CHANGE_TICKS * 2 + 1; i += 1) {
+      const input: InputFrame = {
+        ...drive,
+        laneDelta: i === 0 ? 1 : i === 2 ? -1 : 0,
+      };
+      clearTick(rocket, input);
+      clearTick(jump, input);
+      expect(rocket.renderPlayer.xM).toBe(jump.renderPlayer.xM);
+      expect(rocket.renderPlayer.previousXM).toBe(jump.renderPlayer.previousXM);
+      expect(rocket.renderPlayer.queuedLane).toBe(jump.renderPlayer.queuedLane);
+      for (const alpha of [0, 0.4, 1])
+        expect(laneChangeAnimationPose(rocket.renderPlayer, alpha)).toEqual(
+          laneChangeAnimationPose(jump.renderPlayer, alpha),
+        );
+      if (i === LANE_CHANGE_TICKS / 2 - 1)
+        expect(
+          laneChangeAnimationPose(rocket.renderPlayer, 1).rollRad,
+        ).toBeCloseTo(-Math.PI, 8);
+    }
+    expect(rocket.renderPlayer.lane).toBe(1);
+    expect(rocket.renderPlayer.airborne).toBe(true);
+  });
+
+  it('preserves lane flips already in progress at pickup and at touchdown', () => {
+    const run = emptyRun();
+    run.__debugReplacePickups([pickup('rocket')]);
+    clearTick(run, { ...drive, laneDelta: 1 });
+    expect(run.renderBoosters.rocket).not.toBeNull();
+    expect(run.renderPlayer.laneChangeDirection).toBe(1);
+    expect(run.renderPlayer.laneChangeElapsedS).toBe(FIXED_DT);
+    for (let i = 0; i < flightTicks - 4; i += 1) clearTick(run);
+    for (let i = 0; i < 4; i += 1)
+      clearTick(run, { ...drive, laneDelta: i === 0 ? -1 : i === 1 ? 1 : 0 });
+    expect(run.renderBoosters.rocket).toBeNull();
+    expect(run.renderPlayer).toMatchObject({
+      airborne: false,
+      lane: 1,
+      laneChangeDirection: -1,
+      queuedLane: 2,
+    });
+    expect(run.renderPlayer.laneChangeElapsedS).toBeCloseTo(4 * FIXED_DT, 8);
+    for (let i = 4; i < LANE_CHANGE_TICKS * 2; i += 1) clearTick(run);
+    expect(run.renderPlayer).toMatchObject({
+      lane: 2,
+      xM: LANE_X[2],
+      laneChangeDirection: 0,
+      queuedLane: null,
+    });
+  });
+
+  it.each([0, 17, 55, 444])(
+    'keeps natural traffic near touchdown with steerable routes and no visible spawns (seed %i)',
+    (seed) => {
+      const run = launchRocket(seed);
+      const seenIds = new Set(run.renderTraffic.map((vehicle) => vehicle.id));
+      let newCars = 0;
+      let steered = false;
+      for (let i = 0; i < flightTicks; i += 1) {
+        const input = certificateBotInput(run, run.snapshot());
+        steered ||= input.laneDelta !== 0;
+        run.tick(input);
+        expect(run.phaseName).toBe('running');
+        for (const vehicle of run.renderTraffic) {
+          if (seenIds.has(vehicle.id)) continue;
+          expect(
+            vehicle.absoluteZM - run.renderPlayer.absoluteZM,
+          ).toBeGreaterThan(TRAFFIC_RENDER_AHEAD_M);
+          seenIds.add(vehicle.id);
+          newCars += 1;
+        }
+      }
+      expect(newCars).toBeGreaterThan(0);
+      expect(steered).toBe(true);
+      expect(
+        run.renderTraffic.some(
+          (vehicle) =>
+            vehicle.absoluteZM >= run.renderPlayer.absoluteZM &&
+            vehicle.absoluteZM < run.renderPlayer.absoluteZM + 90,
+        ),
+      ).toBe(true);
+      expect(run.renderBoosters).toMatchObject({
+        rocket: null,
+        shieldReady: false,
+        protectionS: 0,
+      });
+    },
+  );
+
+  it('replays an in-flight traffic proof through touchdown using the actual rocket arc', () => {
+    const run = launchRocket();
+    // Capture the last certificate born on a tick during the second half of
+    // flight, so its proof must cover both rocket descent and normal driving.
+    for (let i = 0; i < flightTicks - 1; i += 1) {
+      run.tick(certificateBotInput(run, run.snapshot()));
+      const certificate = run
+        .getGroundCertificates()
+        .filter((candidate) => candidate.revealTick === run.renderTick)
+        .at(-1);
+      if (!certificate || run.renderBoosters.rocket!.elapsedS < 2) continue;
+      const snapshot = run.snapshot();
+      const replay = emptyRun();
+      replay.__debugSetPlayer(snapshot.player);
+      replay.__debugSetBoosters(snapshot.boosters);
+      replay.__debugReplaceTraffic(snapshot.traffic);
+      const trafficIds = new Set(snapshot.traffic.map((vehicle) => vehicle.id));
+      const trace = new Map(
+        certificate.witness.map((point) => [point.tick, point]),
+      );
+      let checkedGrounded = false;
+      for (
+        let tick = certificate.revealTick;
+        tick <= certificate.witness.at(-1)!.tick;
+        tick += 1
+      ) {
+        // Isolate the certified world from later, independently proved rows.
+        replay.__debugReplaceTraffic(
+          replay.renderTraffic.filter((vehicle) => trafficIds.has(vehicle.id)),
+        );
+        replay.__debugReplacePickups([]);
+        const point = trace.get(tick);
+        replay.tick(point?.input ?? drive);
+        expect(replay.phaseName).toBe('running');
+        if (!point) continue;
+        expect(Math.round(replay.renderPlayer.xM * 1000)).toBe(point.xMM);
+        expect(Math.round(replay.renderPlayer.yM * 1000)).toBe(point.yMM);
+        expect(Math.round(replay.renderPlayer.absoluteZM * 1000)).toBe(
+          point.zMM,
+        );
+        expect(Math.round(replay.renderPlayer.speedMps * 1000)).toBe(
+          point.speedMMps,
+        );
+        checkedGrounded ||= !replay.renderPlayer.airborne;
+      }
+      expect(checkedGrounded).toBe(true);
+      return;
+    }
+    throw new Error('No in-flight traffic certificate was generated');
+  });
 
   it('pauses mid-flight without moving, consuming inventory or awarding the landing twice', () => {
     const run = emptyRun();
     run.__debugReplacePickups([pickup('rocket')]);
     run.tick(EMPTY_INPUT);
     for (let i = 0; i < 100; i += 1) run.tick(drive);
+    run.tick({ ...drive, laneDelta: 1 });
     run.setPaused(true);
     const snapshot = run.snapshot();
     for (let i = 0; i < 100; i += 1) run.tick(tap);
     expect(run.snapshot()).toEqual(snapshot);
     run.setPaused(false);
-    for (let i = 0; i < 160; i += 1) run.tick(drive);
+    for (let i = 0; i < 160; i += 1)
+      run.tick(certificateBotInput(run, run.snapshot()));
     expect(
       run.drainEvents().filter((event) => event.type === 'rocket-land'),
     ).toHaveLength(1);
@@ -422,7 +663,7 @@ describe('Yeet Rocket', () => {
       return runRenderSchedule(
         simulation,
         Array.from({ length: hz * 5 }, () => 1 / hz),
-        () => drive,
+        () => certificateBotInput(simulation, simulation.snapshot()),
       );
     };
     expect(run(30)).toBe(run(60));

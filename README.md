@@ -80,7 +80,7 @@ while asserting deterministic, bounded retained state.
 ## Assets and performance
 
 The 12 curated GLBs under `public/models` are SHA-256 pinned in
-`app/game/assets.ts`; that same manifest drives the Credits dialog. Tests reject
+`app/game/assets.ts`. Tests reject
 uncredited models, map/OSM data, and the non-redistributable London double-decker.
 See `CREDITS.md` for attribution and modification details and `LICENSE` for the
 preserved MIT notice covering adapted first-party Curbside Rush code.

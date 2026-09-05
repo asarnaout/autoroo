@@ -86,5 +86,8 @@ describe('night environment', () => {
     expect(isNightWindowMaterialName('window')).toBe(true);
     expect(isNightWindowMaterialName('border')).toBe(false);
     expect(isNightWindowMaterialName('citybits_texture')).toBe(false);
+    expect(isNightWindowMaterialName('trim', 'midriseA')).toBe(true);
+    expect(isNightWindowMaterialName('trim', 'towerB')).toBe(false);
+    expect(isNightWindowMaterialName('trim')).toBe(false);
   });
 });

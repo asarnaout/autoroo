@@ -2,7 +2,7 @@
 
 Autoroo uses a deliberately small subset of models and music inherited from
 Curbside Rush. The authoritative machine-readable manifest is
-`app/game/assets.ts`; it drives the in-game Credits view and pins every imported
+`app/game/assets.ts`; it pins every imported
 binary asset to its SHA-256, author, title, source, licence or rights basis, and
 modification record. CC0 credits are retained voluntarily.
 
@@ -23,7 +23,9 @@ modification record. CC0 credits are retained voluntarily.
   <https://poly.pizza/m/JTsKOSB23Y>, <https://poly.pizza/m/obYD8hWLTZ>,
   <https://poly.pizza/m/4RoPd9BkSx>), released **CC0 1.0**. Tower A, Tower B,
   and Midrise Low are inherited byte-identically. Midrise A retains Curbside
-  Rush's NYC palette pass on its solid roof material.
+  Rush's NYC palette pass on its solid roof material. Autoroo applies warm-white
+  window lighting at runtime, including Midrise A's trim-labelled lower panes,
+  and gives Tower B's window framing a neutral finish.
 - **nyc-brownstone-a-ba36b2c8.glb** ("Building") — by **Kay Lousberg**, City
   Builder Bits pack via Poly Pizza (<https://poly.pizza/m/otRsYa6pan>), released
   **CC0 1.0**. It retains Curbside Rush's NYC palette and existing-window-pane
@@ -40,9 +42,9 @@ modification record. CC0 credits are retained voluntarily.
   (<https://poly.pizza/m/bsvS0E1eo4R>), licensed **CC-BY 3.0**
   (<https://creativecommons.org/licenses/by/3.0/>). Required credit:
   **"jeremy" (Poly Pizza)**. The inherited bytes are unchanged; Autoroo
-  recolours material `039BE5`, makes its mapped front/rear lenses emissive, and
-  converts the shared vehicle materials to glossy StandardMaterial shading at
-  runtime.
+  recolours the `FFFFFF` body off-white and the `039BE5` window band charcoal,
+  makes its mapped front/rear lenses emissive, and converts the shared vehicle
+  materials to glossy StandardMaterial shading at runtime.
 
 ## Music — Suno paid-plan output
 

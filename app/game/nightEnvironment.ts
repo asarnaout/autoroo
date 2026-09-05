@@ -1,4 +1,5 @@
 import { visualRoadProfileAt } from './generator';
+import type { ModelKey } from './assets';
 
 export type StreetlightSide = -1 | 1;
 
@@ -85,6 +86,15 @@ export function isStreetlightVisible(
 }
 
 /** Material-name aliases verified as actual panes in the curated NYC models. */
-export function isNightWindowMaterialName(name: string): boolean {
-  return /window|glass|cristal/.test(name.toLowerCase());
+export function isNightWindowMaterialName(
+  name: string,
+  modelKey?: ModelKey,
+): boolean {
+  const lowerName = name.toLowerCase();
+  // The midrise's lower panes are mislabelled as trim. Other models use trim
+  // for actual frames, so the alias must stay scoped to this asset.
+  return (
+    /window|glass|cristal/.test(lowerName) ||
+    (modelKey === 'midriseA' && lowerName === 'trim')
+  );
 }

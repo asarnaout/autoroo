@@ -129,6 +129,8 @@ describe('curated asset supply chain', () => {
       scale: 0.24,
       yaw: 0,
       groundY: 0.03,
+      bodyMaterials: ['FFFFFF'],
+      glassMaterials: ['039BE5'],
       headlightMaterials: ['FF9800'],
       taillightMaterials: ['F44336'],
     });

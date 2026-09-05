@@ -29,6 +29,7 @@ export interface ModelConfig {
   readonly yaw: number;
   readonly groundY: number;
   readonly bodyMaterials?: readonly string[];
+  readonly glassMaterials?: readonly string[];
   readonly color?: string;
   readonly headlightMaterials?: readonly string[];
   readonly taillightMaterials?: readonly string[];
@@ -61,7 +62,7 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     yaw: 0,
     groundY: 0.059,
     bodyMaterials: ['White'],
-    color: '#2e9b91',
+    color: '#a83232',
     headlightMaterials: ['Headlights'],
     taillightMaterials: ['TailLights'],
   },
@@ -70,8 +71,10 @@ export const MODEL_CONFIGS: Readonly<Record<ModelKey, ModelConfig>> = {
     scale: 0.24,
     yaw: 0,
     groundY: 0.03,
-    bodyMaterials: ['039BE5'],
-    color: '#7656d6',
+    bodyMaterials: ['FFFFFF'],
+    // This model's blue material covers its window band, not the white body.
+    glassMaterials: ['039BE5'],
+    color: '#f1eee7',
     headlightMaterials: ['FF9800'],
     taillightMaterials: ['F44336'],
   },
@@ -132,7 +135,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC-BY 3.0',
     licenseUrl: 'https://creativecommons.org/licenses/by/3.0/',
     modificationNotes:
-      'Inherited unchanged; Autoroo recolours material 039BE5, adds mapped-lens emissive glow, and converts the shared vehicle materials to glossy StandardMaterial shading at runtime.',
+      'Inherited unchanged; Autoroo recolours the FFFFFF body off-white and the 039BE5 window band charcoal, adds mapped-lens emissive glow, and converts shared vehicle materials to glossy StandardMaterial shading at runtime.',
   },
   {
     file: MODEL_URLS.towerA,
@@ -143,7 +146,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited byte-identical model; no Autoroo modification.',
+      'Inherited byte-identical model; Autoroo applies warm-white window lighting at runtime.',
   },
   {
     file: MODEL_URLS.towerB,
@@ -154,7 +157,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited byte-identical model; no Autoroo modification.',
+      'Inherited byte-identical model; Autoroo applies warm-white window lighting and neutral window-frame colours at runtime.',
   },
   {
     file: MODEL_URLS.midriseA,
@@ -165,7 +168,7 @@ export const ASSET_CREDITS: readonly AssetCredit[] = [
     license: 'CC0 1.0',
     licenseUrl: CC0,
     modificationNotes:
-      'Inherited Curbside Rush NYC palette pass; solid roof material recoloured.',
+      'Inherited Curbside Rush NYC palette pass; solid roof material recoloured. Autoroo lights both the window and trim-labelled lower panes warm white at runtime.',
   },
   {
     file: MODEL_URLS.midriseLow,

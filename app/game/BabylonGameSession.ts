@@ -1004,7 +1004,7 @@ export class BabylonGameSession {
       return;
     }
     if (BUILDING_KEYS.includes(config.key as BuildingModelKey))
-      this.applyNightWindowGlow(container);
+      this.applyNightWindowGlow(container, config.key);
   }
 
   /**
@@ -1019,6 +1019,8 @@ export class BabylonGameSession {
   ): void {
     const paint = Color3.FromHexString(config.color ?? '#ffffff');
     const bodyNames = new Set(config.bodyMaterials ?? []);
+    const glassNames = new Set(config.glassMaterials ?? []);
+    const glass = Color3.FromHexString('#292b2d');
     const converted = new Map<Material, StandardMaterial>();
     const headlight = new Color3(0.5, 0.46, 0.3);
     const taillight = new Color3(0.32, 0.03, 0.02);
@@ -1037,15 +1039,17 @@ export class BabylonGameSession {
               );
         if (source instanceof PBRMaterial)
           material.diffuseTexture = source.albedoTexture;
-        material.diffuseColor = bodyNames.has(source.name)
-          ? paint.clone()
-          : materialAlbedo(source).clone();
+        material.diffuseColor = glassNames.has(source.name)
+          ? glass.clone()
+          : bodyNames.has(source.name)
+            ? paint.clone()
+            : materialAlbedo(source).clone();
         material.alpha = source.alpha;
         material.backFaceCulling = source.backFaceCulling;
 
         if (
           /window|glass|windscreen|windshield/i.test(source.name) ||
-          source.name === '455A64'
+          glassNames.has(source.name)
         ) {
           material.specularColor = new Color3(0.36, 0.36, 0.36);
           material.specularPower = 72;
@@ -1060,13 +1064,15 @@ export class BabylonGameSession {
           material.specularPower = 44;
         }
 
-        if (config.headlightMaterials?.includes(source.name))
+        if (glassNames.has(source.name))
+          material.emissiveColor = Color3.Black();
+        else if (config.headlightMaterials?.includes(source.name))
           material.emissiveColor = headlight.clone();
         else if (config.taillightMaterials?.includes(source.name))
           material.emissiveColor = taillight.clone();
         else if (source instanceof PBRMaterial)
           material.emissiveColor = source.emissiveColor.clone();
-        if (bodyNames.has(source.name)) {
+        if (bodyNames.has(source.name) && !glassNames.has(source.name)) {
           material.emissiveColor = material.emissiveColor.add(
             paint.scale(0.06),
           );
@@ -1079,11 +1085,24 @@ export class BabylonGameSession {
     for (const material of converted.values()) material.freeze();
   }
 
-  private applyNightWindowGlow(container: AssetContainer): void {
-    const warm = new Color3(0.95, 0.6, 0.29);
+  private applyNightWindowGlow(
+    container: AssetContainer,
+    modelKey: ModelKey,
+  ): void {
+    const warm = new Color3(1, 0.82, 0.62);
     const darkPane = new Color3(0.05, 0.045, 0.04);
+    const neutralFrame = new Color3(0.25, 0.24, 0.22);
     for (const material of container.materials) {
-      if (!isNightWindowMaterialName(material.name)) continue;
+      // The tower uses the same blue trim colour for solid window framing.
+      // Give those frames a neutral finish without making them emit light.
+      if (modelKey === 'towerB' && material.name === 'trim') {
+        if (material instanceof PBRMaterial)
+          material.albedoColor = neutralFrame.clone();
+        else if (material instanceof StandardMaterial)
+          material.diffuseColor = neutralFrame.clone();
+        continue;
+      }
+      if (!isNightWindowMaterialName(material.name, modelKey)) continue;
       if (material instanceof PBRMaterial) {
         const authored =
           material.emissiveTexture !== null ||

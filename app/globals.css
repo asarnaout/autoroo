@@ -57,6 +57,160 @@
   --menu-ink: #080f2b;
   --menu-cream: #fff5d6;
   --menu-yellow: #ffe52b;
+  --boing: #b4ff49;
+  --bubble: #63e7ff;
+  --rocket: #ff9861;
+}
+
+.booster-hud {
+  position: absolute;
+  z-index: 10;
+  left: 22px;
+  bottom: 24px;
+  display: flex;
+  gap: 10px;
+  pointer-events: none;
+}
+.booster-slot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 60px;
+  padding: 9px 12px;
+  border: 2px solid #57657e;
+  border-radius: 15px;
+  background: rgb(9 20 43 / 92%);
+  color: #bdc8db;
+  box-shadow: 0 5px 0 rgb(0 0 0 / 20%);
+  transition:
+    border-color 150ms,
+    color 150ms;
+}
+.booster-slot svg {
+  width: 25px;
+  height: 25px;
+}
+.booster-slot span {
+  display: grid;
+  gap: 2px;
+}
+.booster-slot strong {
+  font-size: 14px;
+}
+.booster-slot small {
+  font-size: 12px;
+  color: #d1d9e8;
+}
+.booster-slot b {
+  font-size: 20px;
+  margin-left: 4px;
+}
+.boing-slot[data-ready='true'] {
+  border-color: var(--boing);
+  color: var(--boing);
+}
+.shield-slot[data-ready='true'] {
+  border-color: var(--bubble);
+  color: var(--bubble);
+}
+.booster-notice {
+  position: absolute;
+  z-index: 12;
+  top: 108px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  border: 2px solid #fff5d6;
+  border-radius: 13px;
+  padding: 11px 18px;
+  background: #182340;
+  color: #fff5d6;
+  box-shadow: 0 5px 0 rgb(0 0 0 / 22%);
+  font-size: 16px;
+  font-weight: 900;
+  text-align: center;
+  pointer-events: none;
+}
+.booster-notice svg {
+  flex: 0 0 21px;
+  width: 21px;
+}
+.booster-guide-row {
+  display: flex;
+  gap: 15px;
+  padding: 15px;
+  border-radius: 15px;
+  background: #14223d;
+  color: white;
+}
+.booster-guide-row > svg {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+}
+.boing-guide > svg {
+  color: var(--boing);
+}
+.shield-guide > svg {
+  color: var(--bubble);
+}
+.rocket-guide > svg {
+  color: var(--rocket);
+}
+.booster-guide-row h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 900;
+}
+.booster-guide-row h3 span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c6d2e5;
+  margin-left: 8px;
+}
+.booster-guide-row p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e1e8f5;
+}
+@media (max-width: 640px) {
+  .booster-hud {
+    left: 12px;
+    bottom: 16px;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .booster-slot {
+    min-height: 46px;
+    padding: 6px 9px;
+    gap: 6px;
+  }
+  .booster-slot svg {
+    width: 21px;
+    height: 21px;
+  }
+  .booster-notice {
+    top: 100px;
+    font-size: 14px;
+    padding: 8px 12px;
+  }
+}
+@media (max-height: 500px) {
+  .booster-hud {
+    bottom: 10px;
+    flex-direction: row;
+  }
+  .booster-slot small {
+    display: none;
+  }
+  .booster-notice {
+    top: 85px;
+  }
 }
 
 * {

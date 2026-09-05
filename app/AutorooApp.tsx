@@ -27,7 +27,12 @@ import {
   Star,
   Volume2,
   VolumeX,
+  ChevronsUp,
+  Rocket,
+  Shield,
+  Sparkles,
 } from 'lucide-react';
+import { BOOSTER_INFO, makeBoosterState } from './game/boosters';
 import { ASSET_CREDITS } from './game/assets';
 import { LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
@@ -72,6 +77,8 @@ const INITIAL_SNAPSHOT: RunSnapshot = {
     maxForwardM: 0,
   },
   traffic: [],
+  pickups: [],
+  boosters: makeBoosterState(),
   score: 0,
   bonusScore: 0,
   difficulty: 0,
@@ -97,6 +104,9 @@ function statusPayload(snapshot: RunSnapshot, best: number) {
     activeLanes: snapshot.laneCount,
     rearPressureWarning: snapshot.rearWarning,
     jumpGateVisible: snapshot.activeCertificate?.kind === 'jump',
+    doubleJumpReady: snapshot.boosters.doubleJumpReady,
+    shieldReady: snapshot.boosters.shieldReady,
+    rocketActive: snapshot.boosters.rocket !== null,
   };
 }
 
@@ -359,6 +369,66 @@ export function AutorooApp() {
             <strong>{speedMph}</strong>
             <span>MPH</span>
           </div>
+          <div className="booster-hud" aria-label="Collected boosters">
+            <div
+              className="booster-slot boing-slot"
+              data-ready={snapshot.boosters.doubleJumpReady}
+            >
+              <ChevronsUp aria-hidden="true" />
+              <span>
+                <strong>Boing!</strong>
+                <small>
+                  {snapshot.boosters.doubleJumpReady
+                    ? 'Space again in midair'
+                    : 'Find a spring'}
+                </small>
+              </span>
+              <b
+                aria-label={
+                  snapshot.boosters.doubleJumpReady
+                    ? 'One charge ready'
+                    : 'No charge'
+                }
+              >
+                {snapshot.boosters.doubleJumpReady ? '1' : '0'}
+              </b>
+            </div>
+            <div
+              className="booster-slot shield-slot"
+              data-ready={snapshot.boosters.shieldReady}
+            >
+              <Shield aria-hidden="true" />
+              <span>
+                <strong>Bubble Buddy</strong>
+                <small>
+                  {snapshot.boosters.shieldReady
+                    ? 'One bonk covered'
+                    : snapshot.boosters.protectionS > 0
+                      ? 'Recovering…'
+                      : 'Find a bubble'}
+                </small>
+              </span>
+              <b
+                aria-label={
+                  snapshot.boosters.shieldReady
+                    ? 'One shield ready'
+                    : 'No shield'
+                }
+              >
+                {snapshot.boosters.shieldReady ? '1' : '0'}
+              </b>
+            </div>
+          </div>
+          {isPlaying && snapshot.boosters.notice && (
+            <output className="booster-notice" aria-live="polite">
+              {snapshot.boosters.rocket ? (
+                <Rocket aria-hidden="true" />
+              ) : (
+                <Sparkles aria-hidden="true" />
+              )}
+              {snapshot.boosters.notice}
+            </output>
+          )}
         </>
       )}
 
@@ -456,6 +526,8 @@ export function AutorooApp() {
                 </Button>
                 <span className="start-action-divider" aria-hidden="true" />
                 <CreditsDialog />
+                <span className="start-action-divider" aria-hidden="true" />
+                <BoostersDialog />
               </div>
             </div>
 
@@ -502,6 +574,7 @@ export function AutorooApp() {
             or press <Kbd>Esc</Kbd>
           </p>
           <CreditsDialog />
+          <BoostersDialog />
         </section>
       )}
 
@@ -580,9 +653,51 @@ function CreditsDialog() {
           ))}
         </div>
         <p className="credits-footnote">
-          Adapted procedural road and presentation techniques retain Curbside
-          Rush’s MIT notice. The purchased London double-decker and all map/OSM
-          data are explicitly excluded.
+          Booster creatures, animations, and sound effects are original
+          procedural Autoroo assets. No third-party booster models, textures, or
+          audio samples are used. Adapted procedural road and presentation
+          techniques retain Curbside Rush’s MIT notice. The purchased London
+          double-decker and all map/OSM data are explicitly excluded.
+        </p>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function BoostersDialog() {
+  const icons = { boing: ChevronsUp, rocket: Rocket, shield: Shield };
+  return (
+    <Dialog>
+      <DialogTrigger render={<Button variant="ghost" size="sm" />}>
+        <Sparkles aria-hidden="true" /> Boosters
+      </DialogTrigger>
+      <DialogContent className="credits-dialog booster-guide">
+        <DialogHeader>
+          <DialogTitle>Roadside weirdos</DialogTitle>
+          <DialogDescription>
+            Spot a floating buddy? Steer over to collect it. The bubbles and
+            rockets need a well-timed jump, too.
+          </DialogDescription>
+        </DialogHeader>
+        {(['boing', 'shield', 'rocket'] as const).map((kind) => {
+          const info = BOOSTER_INFO[kind];
+          const Icon = icons[kind];
+          return (
+            <article key={kind} className={`booster-guide-row ${kind}-guide`}>
+              <Icon aria-hidden="true" />
+              <div>
+                <h3>
+                  {info.name} <span>{info.rarity}</span>
+                </h3>
+                <p>{info.instruction}</p>
+              </div>
+            </article>
+          );
+        })}
+        <p className="credits-footnote">
+          Boing! works even while falling. Release Space and press again to use
+          it. Holding Space still auto-hops after landing. Rockets handle the
+          steering until touchdown.
         </p>
       </DialogContent>
     </Dialog>

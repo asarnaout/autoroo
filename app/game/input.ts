@@ -24,8 +24,8 @@ export class InputBuffer {
     if (code === 'ArrowUp') this.accelerate = true;
     if (code === 'ArrowDown') this.brake = true;
     if (code === 'Space') {
+      if (!repeat && !this.jumpHeld) this.jumpQueued = true;
       this.jumpHeld = true;
-      if (!repeat) this.jumpQueued = true;
     }
     if (repeat) return null;
 
@@ -47,12 +47,14 @@ export class InputBuffer {
   consume(): InputFrame {
     const laneDelta = this.laneQueue.shift() ?? 0;
     const jumpPressed = this.jumpQueued || this.jumpHeld;
+    const jumpTapped = this.jumpQueued;
     this.jumpQueued = false;
     return {
       accelerate: this.accelerate,
       brake: this.brake,
       laneDelta,
       jumpPressed,
+      jumpTapped,
     };
   }
 

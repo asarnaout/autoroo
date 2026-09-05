@@ -80,6 +80,27 @@ export class AutorooAudio {
   play(event: GameEvent): void {
     if (!this.context || !this.master || this.muted) return;
     switch (event.type) {
+      case 'pickup':
+        this.chirp(520, 1040, 0.12, 'sine', 0.075);
+        this.chirp(780, 1560, 0.15, 'triangle', 0.045, 0.09);
+        break;
+      case 'double-jump':
+        this.boing();
+        break;
+      case 'rocket-launch':
+        this.chirp(95, 980, 0.55, 'sawtooth', 0.08);
+        this.chirp(640, 1450, 0.7, 'sine', 0.1, 0.15);
+        this.chirp(210, 65, 0.35, 'triangle', 0.09, 0.5);
+        break;
+      case 'rocket-land':
+        this.chirp(95, 45, 0.18, 'sine', 0.14);
+        this.chirp(440, 660, 0.18, 'triangle', 0.09, 0.12);
+        this.chirp(660, 880, 0.24, 'triangle', 0.075, 0.26);
+        break;
+      case 'shield-pop':
+        this.chirp(680, 65, 0.12, 'sine', 0.15);
+        this.chirp(180, 470, 0.25, 'triangle', 0.08, 0.09);
+        break;
       case 'jump':
         this.chirp(170, 390, 0.18, 'square', 0.11);
         break;
@@ -186,6 +207,41 @@ export class AutorooAudio {
     oscillator.connect(gain).connect(this.master);
     oscillator.start(now);
     oscillator.stop(now + durationS + 0.02);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+  }
+
+  /** A spring wobble and tiny raspberry, synthesized from scratch. */
+  private boing(): void {
+    if (!this.context || !this.master) return;
+    const now = this.context.currentTime;
+    const oscillator = this.context.createOscillator();
+    const gain = this.context.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(150, now);
+    for (const [delay, frequency] of [
+      [0.07, 720],
+      [0.15, 180],
+      [0.24, 570],
+      [0.34, 230],
+      [0.44, 390],
+      [0.58, 160],
+    ]) {
+      oscillator.frequency.exponentialRampToValueAtTime(frequency, now + delay);
+    }
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.2, now + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.62);
+    oscillator.connect(gain).connect(this.master);
+    oscillator.start(now);
+    oscillator.stop(now + 0.65);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      gain.disconnect();
+    };
+    this.chirp(105, 55, 0.2, 'sawtooth', 0.075, 0.08);
   }
 
   private noiseBurst(): void {

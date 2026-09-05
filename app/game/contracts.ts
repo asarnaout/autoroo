@@ -3,12 +3,47 @@ export type LaneMask = number;
 export type RunPhase = 'ready' | 'running' | 'paused' | 'game-over';
 export type VehicleKind = 'sedan' | 'suv' | 'bus';
 export type VehicleRole = 'ordinary' | 'gate' | 'rear-pressure';
+export type BoosterKind = 'boing' | 'rocket' | 'shield';
+
+export interface BoosterPickup {
+  readonly id: string;
+  readonly kind: BoosterKind;
+  readonly lane: LaneIndex;
+  readonly absoluteZM: number;
+  readonly yM: number;
+}
+
+export interface RocketFlight {
+  elapsedS: number;
+  readonly startZM: number;
+  readonly startXM: number;
+  readonly startYM: number;
+  readonly landingZM: number;
+  readonly landingLane: LaneIndex;
+}
+
+export interface BoosterState {
+  doubleJumpReady: boolean;
+  shieldReady: boolean;
+  /** Remaining simulation time, so protection freezes when paused. */
+  protectionS: number;
+  doubleJumpOriginYM: number | null;
+  doubleJumpElapsedS: number;
+  doubleJumpUsedThisFlight: boolean;
+  rocket: RocketFlight | null;
+  effect: 'boing' | 'rocket' | 'shield-pop' | 'landing' | null;
+  effectRemainingS: number;
+  notice: string | null;
+  noticeRemainingS: number;
+}
 
 export interface InputFrame {
   readonly accelerate: boolean;
   readonly brake: boolean;
   readonly laneDelta: -1 | 0 | 1;
   readonly jumpPressed: boolean;
+  /** Fresh physical press only; held auto-hop must not spend a booster. */
+  readonly jumpTapped?: boolean;
 }
 
 export interface PlayerState {
@@ -141,6 +176,8 @@ export interface RunSnapshot {
   readonly elapsedS: number;
   readonly player: Readonly<PlayerState>;
   readonly traffic: readonly Readonly<TrafficVehicle>[];
+  readonly pickups: readonly Readonly<BoosterPickup>[];
+  readonly boosters: Readonly<BoosterState>;
   readonly score: number;
   readonly bonusScore: number;
   readonly difficulty: number;
@@ -163,6 +200,11 @@ export interface AssetCredit {
 }
 
 export type GameEvent =
+  | { readonly type: 'pickup'; readonly kind: BoosterKind }
+  | { readonly type: 'double-jump' }
+  | { readonly type: 'rocket-launch' }
+  | { readonly type: 'rocket-land' }
+  | { readonly type: 'shield-pop' }
   | { readonly type: 'jump' }
   | { readonly type: 'lane-change' }
   | { readonly type: 'warning' }

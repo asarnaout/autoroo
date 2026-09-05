@@ -27,6 +27,7 @@ import '@babylonjs/loaders/glTF/glTFFileLoader';
 import '@babylonjs/loaders/glTF/2.0/glTFLoader';
 import '@babylonjs/loaders/glTF/2.0/Extensions/KHR_materials_unlit';
 import { AutorooAudio } from './audio';
+import { BoosterVisuals } from './boosterVisuals';
 import {
   MODEL_CONFIGS,
   MODEL_URLS,
@@ -201,6 +202,7 @@ export class BabylonGameSession {
   private readonly simulation: AutorooSimulation;
   private readonly input = new InputBuffer();
   private readonly audio = new AutorooAudio();
+  private readonly boosterVisuals: BoosterVisuals;
   private readonly callbacks: SessionCallbacks;
   private readonly containers = new Map<ModelKey, AssetContainer>();
   private readonly roadTiles: RoadTile[] = [];
@@ -360,6 +362,7 @@ export class BabylonGameSession {
     sun.diffuse = Color3.FromHexString('#ffddab');
 
     this.simulation = new AutorooSimulation(seed);
+    this.boosterVisuals = new BoosterVisuals(this.scene);
     this.buildNightSky();
     this.buildGround();
     this.buildStreetlights();
@@ -1302,11 +1305,20 @@ export class BabylonGameSession {
       player.previousZM + (player.absoluteZM - player.previousZM) * alpha;
     const interpolatedY =
       player.previousYM + (player.yM - player.previousYM) * alpha;
-    const lanePose = laneChangeAnimationPose(player, alpha);
+    const boosts = this.simulation.renderBoosters;
+    const lanePose = boosts.rocket
+      ? { liftM: 0, rollRad: Math.sin(boosts.rocket.elapsedS * 24) * 0.035 }
+      : laneChangeAnimationPose(player, alpha);
     // Jump height stays authoritative: flip clearance only fills any missing
     // ground clearance instead of stacking another hop on top of it.
     const visualY = Math.max(interpolatedY, lanePose.liftM);
     const jumpPitch = player.airborne ? -player.verticalSpeedMps * 0.004 : 0;
+    const boingProgress =
+      boosts.effect === 'boing' ? 1 - boosts.effectRemainingS / 0.8 : 0;
+    const boingTurn =
+      boingProgress * boingProgress * (3 - 2 * boingProgress) * Math.PI * 2;
+    const stretch =
+      1 + Math.sin(boingProgress * Math.PI * 4) * (1 - boingProgress) * 0.28;
     const playerEntry = this.playerVisual;
     if (playerEntry) {
       playerEntry.holder.position.set(
@@ -1315,8 +1327,13 @@ export class BabylonGameSession {
         0,
       );
       const animationPivot = playerEntry.animationPivot ?? playerEntry.holder;
-      animationPivot.rotation.x = jumpPitch;
+      animationPivot.rotation.x = jumpPitch - boingTurn;
       animationPivot.rotation.z = lanePose.rollRad;
+      animationPivot.scaling.set(
+        1 / Math.sqrt(stretch),
+        stretch,
+        1 / Math.sqrt(stretch),
+      );
       if (playerEntry.shadow) {
         playerEntry.shadow.position.set(interpolatedX, 0.05, 0);
         playerEntry.shadow.scaling.z = Math.max(0.45, 1 - visualY * 0.08);
@@ -1324,9 +1341,22 @@ export class BabylonGameSession {
       }
     } else {
       this.fallbackPlayer.holder.position.set(interpolatedX, visualY, 0);
-      this.fallbackPlayer.animationPivot.rotation.x = jumpPitch;
+      this.fallbackPlayer.animationPivot.rotation.x = jumpPitch - boingTurn;
       this.fallbackPlayer.animationPivot.rotation.z = lanePose.rollRad;
+      this.fallbackPlayer.animationPivot.scaling.set(
+        1 / Math.sqrt(stretch),
+        stretch,
+        1 / Math.sqrt(stretch),
+      );
     }
+    this.boosterVisuals.update(
+      this.simulation.renderPickups,
+      boosts,
+      interpolatedPlayerZ,
+      interpolatedX,
+      visualY,
+      (this.simulation.renderTick + alpha) * FIXED_DT,
+    );
     this.updateTraffic(interpolatedPlayerZ, alpha);
     this.updateRoad(interpolatedPlayerZ);
     this.updateScenery(interpolatedPlayerZ);
@@ -1336,8 +1366,18 @@ export class BabylonGameSession {
     // Keep the eye and its target on the same centreline. Partial, mismatched
     // lane offsets made the old shot yaw sideways and read as a tilted camera.
     this.camera.position.x = interpolatedX;
-    this.camera.position.y = 9.8 + interpolatedY * 0.12;
-    this.target.set(interpolatedX, 1.3 + interpolatedY * 0.16, 27);
+    const flightFollow = Math.max(0, interpolatedY - 4.5) * 0.9;
+    this.camera.position.y = 9.8 + interpolatedY * 0.12 + flightFollow;
+    this.camera.fov =
+      0.78 +
+      (boosts.rocket
+        ? Math.sin((boosts.rocket.elapsedS / 4) * Math.PI) * 0.13
+        : 0);
+    this.target.set(
+      interpolatedX,
+      1.3 + interpolatedY * 0.16 + flightFollow,
+      27,
+    );
     this.camera.setTarget(this.target);
   }
 

@@ -1,0 +1,177 @@
+import { LANE_X, FIXED_DT, MAX_SPEED_MPS, activeLanes } from './constants';
+import type {
+  BoosterKind,
+  BoosterPickup,
+  BoosterState,
+  PlayerState,
+} from './contracts';
+import { laneMaskAt, isSteadyRoadRange } from './generator';
+import { hashParts, hashUnit } from './random';
+
+export const BOOSTER_SPACING_M = 90;
+export const BOOSTER_POOL_SIZE = 6;
+export const DOUBLE_JUMP_IMPULSE_MPS = 28;
+export const DOUBLE_JUMP_GRAVITY_MPS2 = 34;
+export const ROCKET_DURATION_S = 4;
+export const ROCKET_DISTANCE_M = 480;
+export const ROCKET_HEIGHT_M = 26;
+export const ROCKET_BONUS = 750;
+export const SHIELD_GRACE_S = 1.5;
+export const ROCKET_LANDING_CLEAR_M = 90;
+
+export const BOOSTER_INFO = {
+  boing: {
+    name: 'Boing!',
+    rarity: 'Common',
+    color: '#b4ff49',
+    instruction: 'One extra jump. Tap Space again in midair.',
+  },
+  rocket: {
+    name: 'Yeet Rocket',
+    rarity: 'Rare',
+    color: '#ff9861',
+    instruction: 'Auto-launch! Fly 480 m, land safely, earn +750.',
+  },
+  shield: {
+    name: 'Bubble Buddy',
+    rarity: 'Uncommon',
+    color: '#63e7ff',
+    instruction: 'Soaks up one crash. Carry one at a time.',
+  },
+} as const;
+
+export function makeBoosterState(): BoosterState {
+  return {
+    doubleJumpReady: false,
+    shieldReady: false,
+    protectionS: 0,
+    doubleJumpOriginYM: null,
+    doubleJumpElapsedS: 0,
+    doubleJumpUsedThisFlight: false,
+    rocket: null,
+    effect: null,
+    effectRemainingS: 0,
+    notice: null,
+    noticeRemainingS: 0,
+  };
+}
+
+/** Eight springs, three bubbles and one rocket per seeded 1,080 m block. */
+export function boosterAtStation(
+  seed: number,
+  station: number,
+): BoosterPickup | null {
+  const block = Math.floor(station / 12);
+  const slot = (station + (hashParts(seed, block, 811) % 12)) % 12;
+  const kind: BoosterKind =
+    station === 0
+      ? 'boing'
+      : slot === 11
+        ? 'rocket'
+        : slot >= 8
+          ? 'shield'
+          : 'boing';
+  const absoluteZM =
+    90 + station * BOOSTER_SPACING_M + hashUnit(seed, station, 821) * 14;
+  // Never lure the player into a closing lane or a taper.
+  if (!isSteadyRoadRange(seed, absoluteZM - 20, absoluteZM + 20)) return null;
+  const lanes = activeLanes(laneMaskAt(seed, absoluteZM));
+  // Alternating road edges make the player leave the centre and plan a sweep.
+  const lane = station % 2 === 0 ? lanes[lanes.length - 1] : lanes[0];
+  return {
+    id: `booster-${station}`,
+    kind,
+    lane,
+    absoluteZM,
+    yM: kind === 'boing' ? 1.2 : kind === 'shield' ? 3.4 : 4.8,
+  };
+}
+
+/** Intersect all three axes over the SAME swept interval, including lane flips. */
+export function collectsBooster(
+  player: Readonly<PlayerState>,
+  pickup: BoosterPickup,
+): boolean {
+  let entry = 0;
+  let exit = 1;
+  const axes = [
+    [player.previousZM, player.absoluteZM, pickup.absoluteZM, 2.1],
+    [player.previousXM, player.xM, LANE_X[pickup.lane], 0.85],
+    [player.previousYM + 0.7, player.yM + 0.7, pickup.yM, 0.85],
+  ];
+  for (const [start, end, centre, radius] of axes) {
+    const delta = end - start;
+    if (Math.abs(delta) < 1e-9) {
+      if (Math.abs(start - centre) > radius) return false;
+      continue;
+    }
+    const a = (centre - radius - start) / delta;
+    const b = (centre + radius - start) / delta;
+    entry = Math.max(entry, Math.min(a, b));
+    exit = Math.min(exit, Math.max(a, b));
+    if (entry > exit) return false;
+  }
+  return true;
+}
+
+/** Returns true when booster physics handled the entire player step. */
+export function advanceBoosterFlight(
+  player: PlayerState,
+  boosts: BoosterState,
+): boolean {
+  const rocket = boosts.rocket;
+  if (!rocket && boosts.doubleJumpOriginYM === null) return false;
+  player.previousYM = player.yM;
+  player.previousZM = player.absoluteZM;
+  // Custom arcs use linear per-tick swept heights, not the normal jump parabola.
+  player.jumpElapsedS = 0;
+  if (rocket) {
+    player.previousXM = player.xM;
+    rocket.elapsedS = Math.min(ROCKET_DURATION_S, rocket.elapsedS + FIXED_DT);
+    const t = rocket.elapsedS / ROCKET_DURATION_S;
+    const smooth = t * t * (3 - 2 * t);
+    player.absoluteZM =
+      rocket.startZM + (rocket.landingZM - rocket.startZM) * t;
+    player.xM =
+      rocket.startXM + (LANE_X[rocket.landingLane] - rocket.startXM) * smooth;
+    player.yM = rocket.startYM * (1 - t) + 4 * ROCKET_HEIGHT_M * t * (1 - t);
+    player.verticalSpeedMps =
+      (-rocket.startYM + 4 * ROCKET_HEIGHT_M * (1 - 2 * t)) / ROCKET_DURATION_S;
+    player.speedMps = (rocket.landingZM - rocket.startZM) / ROCKET_DURATION_S;
+    player.takeoffSpeedMps = player.speedMps;
+    player.airborne = true;
+    if (t >= 1 - 1e-9) {
+      player.lane = rocket.landingLane;
+      player.xM = LANE_X[player.lane];
+      player.laneChangeStartXM = player.xM;
+      player.laneChangeElapsedS = 0;
+      player.laneChangeDirection = 0;
+      player.queuedLane = null;
+      player.airborne = false;
+      player.yM = 0;
+      player.verticalSpeedMps = 0;
+      player.speedMps = MAX_SPEED_MPS;
+      player.takeoffSpeedMps = MAX_SPEED_MPS;
+    }
+  } else {
+    boosts.doubleJumpElapsedS += FIXED_DT;
+    const t = boosts.doubleJumpElapsedS;
+    player.absoluteZM += player.takeoffSpeedMps * FIXED_DT;
+    player.yM = Math.max(
+      0,
+      boosts.doubleJumpOriginYM! +
+        DOUBLE_JUMP_IMPULSE_MPS * t -
+        0.5 * DOUBLE_JUMP_GRAVITY_MPS2 * t * t,
+    );
+    player.verticalSpeedMps =
+      DOUBLE_JUMP_IMPULSE_MPS - DOUBLE_JUMP_GRAVITY_MPS2 * t;
+    if (player.yM === 0) {
+      player.airborne = false;
+      player.verticalSpeedMps = 0;
+      player.speedMps = player.takeoffSpeedMps;
+      boosts.doubleJumpOriginYM = null;
+    }
+  }
+  player.maxForwardM = Math.max(player.maxForwardM, player.absoluteZM);
+  return true;
+}

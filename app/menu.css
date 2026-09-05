@@ -150,7 +150,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(15px, 1.9vw, 30px);
+  gap: clamp(8px, 1.2vw, 18px);
+  max-width: calc(100vw - 24px);
   padding: 2px 18px;
   border: 1px solid rgb(232 210 255 / 32%);
   border-radius: 100px;
@@ -448,8 +449,8 @@
     font-size: clamp(18px, 4vw, 29px);
   }
   .start-actions {
-    gap: 22px;
-    padding-inline: 16px;
+    gap: 9px;
+    padding-inline: 12px;
   }
   .start-actions button {
     font-size: 16px;
@@ -490,6 +491,18 @@
 }
 
 @media (max-width: 350px) and (max-aspect-ratio: 4/5) {
+  .start-actions {
+    gap: 6px;
+    padding-inline: 10px;
+  }
+  .start-actions button {
+    gap: 5px;
+    font-size: 14px;
+  }
+  .start-actions svg {
+    width: 19px;
+    height: 19px;
+  }
   .start-control {
     font-size: 12px;
     gap: 5px;

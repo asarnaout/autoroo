@@ -77,6 +77,21 @@ Its SIL Open Font License is preserved in `public/fonts/OFL-LilitaOne.txt`.
 
 ## Adapted first-party code
 
+### Original booster assets
+
+`app/game/boosterVisuals.ts` creates the original **Boing!** spring creature,
+**Yeet Rocket**, and **Bubble Buddy** inflatable with Babylon geometry. The
+models, googly eyes, spring coils, fins, faces, bubble effect, exhaust, and
+burst particles were authored directly for Autoroo. No external booster
+models, textures, or image assets are imported. Meshes are merged by material
+and reused through instances.
+
+The booster collection chirps, double-jump spring wobble and raspberry,
+rocket whistle and landing jingle, and shield pop are original synthesized
+Web Audio effects in `app/game/audio.ts`; they contain no sampled recordings.
+These assets are part of the project's first-party code under the repository's
+existing MIT license. The menu and HUD use the already-installed Lucide icons.
+
 Road surfaces, lane markings, merge signs, the start countdown light, warning
 lights, blue-hour sky and light rig, glass-only window glow, procedural
 streetlights, additive pavement light pools, and related Babylon presentation

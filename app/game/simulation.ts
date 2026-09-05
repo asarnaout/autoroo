@@ -33,6 +33,8 @@ import {
   lerp,
 } from './constants';
 import type {
+  BoosterPickup,
+  BoosterState,
   ChallengeApproachRoute,
   ChallengeCertificate,
   ChallengeManeuver,
@@ -60,6 +62,19 @@ import {
   roadModuleForDistance,
 } from './generator';
 import { hashParts, hashUnit, stableHash } from './random';
+import {
+  BOOSTER_POOL_SIZE,
+  BOOSTER_SPACING_M,
+  ROCKET_DISTANCE_M,
+  ROCKET_BONUS,
+  ROCKET_LANDING_CLEAR_M,
+  SHIELD_GRACE_S,
+  DOUBLE_JUMP_IMPULSE_MPS,
+  advanceBoosterFlight,
+  boosterAtStation,
+  collectsBooster,
+  makeBoosterState,
+} from './boosters';
 
 // Gate rows and ordinary encounters are committed while still behind the fog
 // boundary. Even the last spatial retry stays outside the 285 m render band.
@@ -734,7 +749,9 @@ function canonicalCertificate(
 function canonicalEvent(event: GameEvent): readonly unknown[] {
   return event.type === 'bonus'
     ? [event.type, event.label, event.points]
-    : [event.type];
+    : event.type === 'pickup'
+      ? [event.type, event.kind]
+      : [event.type];
 }
 
 function hashLockedWorld(world: MutableWorldState): string {
@@ -1003,10 +1020,16 @@ function updateRearPressureState(world: MutableWorldState): number {
 }
 
 /** Shared player/traffic/rear transition used by live play and witnesses. */
-function stepWorld(world: MutableWorldState, input: InputFrame): number {
-  applyInputLane(world.player, input, world.seed);
+function stepWorld(
+  world: MutableWorldState,
+  input: InputFrame,
+  boosts?: BoosterState,
+): number {
+  if (!boosts?.rocket) applyInputLane(world.player, input, world.seed);
   const wasAirborne = world.player.airborne;
-  advancePlayerPhysics(world.player, input);
+  if (!boosts || !advanceBoosterFlight(world.player, boosts)) {
+    advancePlayerPhysics(world.player, input);
+  }
   let outcome = !wasAirborne && world.player.airborne ? WORLD_JUMPED : 0;
 
   for (const vehicle of world.traffic) {
@@ -1025,16 +1048,20 @@ function stepWorld(world: MutableWorldState, input: InputFrame): number {
   );
 
   const newMask = laneMaskAt(world.seed, world.player.absoluteZM);
-  enforceActiveLaneTarget(world.player, newMask);
+  if (!boosts?.rocket) enforceActiveLaneTarget(world.player, newMask);
 
   for (const vehicle of world.traffic) {
-    if (collidesSwept(world.player, vehicle)) {
+    if (
+      !boosts?.rocket &&
+      !(boosts && boosts.protectionS > 0) &&
+      collidesSwept(world.player, vehicle)
+    ) {
       outcome |= WORLD_CRASHED;
       world.tickNumber += 1;
       return outcome;
     }
   }
-  outcome |= updateRearPressureState(world);
+  if (!boosts?.rocket) outcome |= updateRearPressureState(world);
   world.tickNumber += 1;
   return outcome;
 }
@@ -2112,6 +2139,9 @@ export class AutorooSimulation {
   private readonly groundRoutes: GroundRoute[] = [];
   private readonly events: GameEvent[] = [];
   private lastBonusLabel: string | null = null;
+  private boosters = makeBoosterState();
+  private readonly pickups: BoosterPickup[] = [];
+  private nextBoosterStation = 0;
 
   constructor(seed = 0xa770_2026) {
     this.seed = seed >>> 0;
@@ -2132,6 +2162,7 @@ export class AutorooSimulation {
       nudgeGateToSteadyRoad(this.seed, firstGateDistance(this.seed)) ??
       Number.POSITIVE_INFINITY;
     this.fillAhead();
+    this.fillBoosters();
   }
 
   private get tickNumber(): number {
@@ -2239,19 +2270,59 @@ export class AutorooSimulation {
     this.rearWarning = false;
     this.events.length = 0;
     this.lastBonusLabel = null;
+    this.boosters = makeBoosterState();
+    this.pickups.length = 0;
+    this.nextBoosterStation = 0;
     this.fillAhead();
+    this.fillBoosters();
   }
 
   tick(input: InputFrame): void {
     if (this.phase !== 'running') return;
     this.lastBonusLabel = null;
+    this.updateBoosterTimers();
+    if (!this.player.airborne) this.boosters.doubleJumpUsedThisFlight = false;
+    if (
+      input.jumpTapped &&
+      this.player.airborne &&
+      this.boosters.doubleJumpReady &&
+      !this.boosters.doubleJumpUsedThisFlight &&
+      !this.boosters.rocket
+    ) {
+      this.boosters.doubleJumpReady = false;
+      this.boosters.doubleJumpUsedThisFlight = true;
+      this.boosters.doubleJumpOriginYM = this.player.yM;
+      this.boosters.doubleJumpElapsedS = 0;
+      this.player.verticalSpeedMps = DOUBLE_JUMP_IMPULSE_MPS;
+      this.boosterEffect('boing', 'BOING! Physics has left the chat.', 0.8);
+      this.emitEvent({ type: 'double-jump' });
+    }
+    const enhancedFlight =
+      this.boosters.rocket !== null ||
+      this.boosters.doubleJumpOriginYM !== null;
     const previousLane = this.player.lane;
-    const outcome = stepWorld(this.world, input);
+    const outcome = stepWorld(this.world, input, this.boosters);
     if ((outcome & WORLD_JUMPED) !== 0) this.emitEvent({ type: 'jump' });
     if ((outcome & WORLD_CRASHED) !== 0) {
-      this.phase = 'game-over';
-      this.emitEvent({ type: 'crash' });
-      return;
+      if (this.boosters.shieldReady) {
+        this.boosters.shieldReady = false;
+        this.boosters.protectionS = SHIELD_GRACE_S;
+        // The bubble knocks the hit traffic away, even if the player is stopped.
+        // Removing those colliders also prevents a pass bonus for the impact.
+        this.world.traffic = this.traffic.filter(
+          (vehicle) => !collidesSwept(this.player, vehicle),
+        );
+        this.boosterEffect(
+          'shield-pop',
+          'POP! Bubble Buddy took the bonk.',
+          0.75,
+        );
+        this.emitEvent({ type: 'shield-pop' });
+      } else {
+        this.phase = 'game-over';
+        this.emitEvent({ type: 'crash' });
+        return;
+      }
     }
     if (this.player.lane !== previousLane)
       this.emitEvent({ type: 'lane-change' });
@@ -2265,9 +2336,170 @@ export class AutorooSimulation {
       this.emitEvent({ type: 'horn' });
     }
     this.cullBehind();
-    this.advanceGateLifecycle();
-    this.fillAhead();
-    this.tryRevealGate();
+    if (enhancedFlight) {
+      // Enhanced arcs cannot use normal-jump witnesses. Keep the next draft
+      // behind the fog while certification waits for an ordinary physics state.
+      this.encounterCursorM = Math.max(
+        this.encounterCursorM,
+        this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M,
+      );
+      if (
+        !this.pendingGateAttempted &&
+        this.pendingGateZM - this.player.absoluteZM < TRAFFIC_RENDER_AHEAD_M + 8
+      ) {
+        this.lastGateZM = this.pendingGateZM;
+        this.scheduleNextGate();
+      }
+    }
+    if (this.boosters.rocket && !this.player.airborne) this.finishRocket();
+    if (!this.boosters.rocket && this.boosters.doubleJumpOriginYM === null) {
+      this.advanceGateLifecycle();
+      this.fillAhead();
+      this.tryRevealGate();
+    }
+    this.collectBoosters();
+    this.fillBoosters();
+  }
+
+  private updateBoosterTimers(): void {
+    this.boosters.protectionS = Math.max(
+      0,
+      this.boosters.protectionS - FIXED_DT,
+    );
+    this.boosters.effectRemainingS = Math.max(
+      0,
+      this.boosters.effectRemainingS - FIXED_DT,
+    );
+    this.boosters.noticeRemainingS = Math.max(
+      0,
+      this.boosters.noticeRemainingS - FIXED_DT,
+    );
+    if (this.boosters.effectRemainingS === 0) this.boosters.effect = null;
+    if (this.boosters.noticeRemainingS === 0) this.boosters.notice = null;
+  }
+
+  private boosterEffect(
+    effect: BoosterState['effect'],
+    notice: string,
+    durationS: number,
+  ): void {
+    this.boosters.effect = effect;
+    this.boosters.effectRemainingS = durationS;
+    this.boosters.notice = notice;
+    this.boosters.noticeRemainingS = 2.8;
+  }
+
+  private fillBoosters(): void {
+    for (let index = this.pickups.length - 1; index >= 0; index -= 1) {
+      if (this.pickups[index].absoluteZM < this.player.absoluteZM - 6)
+        this.pickups.splice(index, 1);
+    }
+    // Keep generation bounded even if a harness relocates the player.
+    this.nextBoosterStation = Math.max(
+      this.nextBoosterStation,
+      Math.floor((this.player.absoluteZM - 90) / BOOSTER_SPACING_M),
+    );
+    while (
+      90 + this.nextBoosterStation * BOOSTER_SPACING_M <
+      this.player.absoluteZM + TRAFFIC_RENDER_AHEAD_M
+    ) {
+      const pickup = boosterAtStation(this.seed, this.nextBoosterStation++);
+      if (!pickup || this.pickups.length >= BOOSTER_POOL_SIZE) continue;
+      // Do not distract the player during a mandatory certified jump chain.
+      if (
+        pickup.absoluteZM > this.pendingGateZM - 50 &&
+        pickup.absoluteZM < this.pendingGateZM + GATE_FORWARD_STEADY_M + 40
+      )
+        continue;
+      this.pickups.push(pickup);
+    }
+  }
+
+  private collectBoosters(): void {
+    if (this.boosters.rocket) return;
+    for (let index = 0; index < this.pickups.length; index += 1) {
+      const pickup = this.pickups[index];
+      if (!collectsBooster(this.player, pickup)) continue;
+      this.pickups.splice(index--, 1);
+      this.emitEvent({ type: 'pickup', kind: pickup.kind });
+      if (pickup.kind === 'boing') {
+        const alreadyReady = this.boosters.doubleJumpReady;
+        this.boosters.doubleJumpReady = true;
+        this.boosters.notice = alreadyReady
+          ? 'BOING! Already loaded.'
+          : 'BOING! Tap Space again while airborne.';
+        this.boosters.noticeRemainingS = 3.5;
+      } else if (pickup.kind === 'shield') {
+        const alreadyReady = this.boosters.shieldReady;
+        this.boosters.shieldReady = true;
+        this.boosters.notice = alreadyReady
+          ? 'Bubble Buddy is already on duty.'
+          : 'Bubble Buddy! One bonk is on us.';
+        this.boosters.noticeRemainingS = 3.5;
+      } else {
+        this.launchRocket();
+        break;
+      }
+    }
+  }
+
+  private launchRocket(): void {
+    const landingZM = this.player.absoluteZM + ROCKET_DISTANCE_M;
+    // Inner lanes persist through every topology transition.
+    const landingLane: LaneIndex = this.player.xM < 0 ? 1 : 2;
+    this.boosters.rocket = {
+      elapsedS: 0,
+      startZM: this.player.absoluteZM,
+      startXM: this.player.xM,
+      startYM: this.player.yM,
+      landingZM,
+      landingLane,
+    };
+    this.boosters.doubleJumpOriginYM = null;
+    this.player.airborne = true;
+    this.player.queuedLane = null;
+    this.player.laneChangeDirection = 0;
+    this.player.laneChangeElapsedS = 0;
+    this.activeCertificate = null;
+    this.groundRoutes.length = 0;
+    // Keep the visible traffic, but release the skipped challenge's locks.
+    for (const vehicle of this.traffic) {
+      vehicle.locked = false;
+      vehicle.certificateId = null;
+    }
+    this.rearWarning = false;
+    this.slowTimeS = 0;
+    this.recoveryTimeS = 0;
+    this.boosterEffect('rocket', 'YEEET! Next stop: a very soft landing.', 4);
+    this.emitEvent({ type: 'rocket-launch' });
+  }
+
+  private finishRocket(): void {
+    this.boosters.rocket = null;
+    this.boosters.protectionS = SHIELD_GRACE_S;
+    this.boosters.doubleJumpUsedThisFlight = false;
+    this.world.traffic = this.traffic.filter(
+      (vehicle) =>
+        vehicle.role !== 'rear-pressure' &&
+        vehicle.absoluteZM > this.player.absoluteZM + ROCKET_LANDING_CLEAR_M,
+    );
+    this.rearPackActive = false;
+    this.rearWarning = false;
+    this.slowTimeS = 0;
+    this.recoveryTimeS = 0;
+    this.encounterCursorM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
+    this.lastEscapeLane = this.player.lane;
+    this.forceCurrentEscapeNextEncounter = true;
+    this.lastGateZM = this.player.absoluteZM;
+    this.scheduleNextGate();
+    this.bonusScore += ROCKET_BONUS;
+    this.boosterEffect('landing', `SPECIAL DELIVERY! +${ROCKET_BONUS}`, 0.65);
+    this.emitEvent({ type: 'rocket-land' });
+    this.emitEvent({
+      type: 'bonus',
+      label: 'SPECIAL DELIVERY!',
+      points: ROCKET_BONUS,
+    });
   }
 
   private resolveScoring(): void {
@@ -2962,6 +3194,11 @@ export class AutorooSimulation {
       elapsedS: this.tickNumber * FIXED_DT,
       player: { ...this.player },
       traffic: this.traffic.map((vehicle) => ({ ...vehicle })),
+      pickups: this.pickups.map((pickup) => ({ ...pickup })),
+      boosters: {
+        ...this.boosters,
+        rocket: this.boosters.rocket ? { ...this.boosters.rocket } : null,
+      },
       score: Math.floor(this.player.maxForwardM) + this.bonusScore,
       bonusScore: this.bonusScore,
       difficulty: difficultyAt(this.player.maxForwardM),
@@ -2979,6 +3216,24 @@ export class AutorooSimulation {
 
   get renderTraffic(): readonly Readonly<TrafficVehicle>[] {
     return this.traffic;
+  }
+
+  get renderBoosters(): Readonly<BoosterState> {
+    return this.boosters;
+  }
+
+  get renderPickups(): readonly BoosterPickup[] {
+    return this.pickups;
+  }
+
+  /** Deterministic harness hooks; never exposed through browser tools. */
+  __debugSetBoosters(patch: Partial<BoosterState>): void {
+    Object.assign(this.boosters, patch);
+  }
+
+  __debugReplacePickups(pickups: readonly BoosterPickup[]): void {
+    this.pickups.length = 0;
+    this.pickups.push(...pickups.map((pickup) => ({ ...pickup })));
   }
 
   get renderTick(): number {
@@ -3108,6 +3363,9 @@ export class AutorooSimulation {
       JSON.stringify([
         hashLockedWorld(this.world),
         this.phase,
+        this.boosters,
+        this.pickups,
+        this.nextBoosterStation,
         exactNumber(this.encounterCursorM),
         this.encounterIndex,
         this.lastEscapeLane,

@@ -283,7 +283,6 @@ button {
 }
 
 .score-chip,
-.speed-chip,
 .hud-icon-button {
   border: 3px solid #142b3c !important;
   background: rgb(255 250 240 / 93%) !important;
@@ -341,42 +340,6 @@ button {
 .hud-icon-button:hover {
   background: #fff !important;
   transform: translateY(-1px);
-}
-
-.speed-chip {
-  position: absolute;
-  z-index: 10;
-  right: 24px;
-  bottom: 24px;
-  width: 102px;
-  height: 102px;
-  display: grid;
-  grid-template-columns: auto auto;
-  place-content: center;
-  align-items: baseline;
-  column-gap: 4px;
-  text-align: center;
-  border-radius: 50%;
-  transform: rotate(3deg);
-  pointer-events: none;
-}
-
-.speed-chip svg {
-  grid-column: 1 / -1;
-  width: 18px;
-  height: 18px;
-  justify-self: center;
-  margin-bottom: 3px;
-  color: #ff5f57;
-}
-
-.speed-chip strong {
-  font: 2.4rem/0.8 var(--font-autoroo-display);
-}
-.speed-chip span {
-  font-size: 0.66rem;
-  font-weight: 1000;
-  letter-spacing: 0.12em;
 }
 
 .overlay-card {
@@ -584,15 +547,6 @@ button {
     height: 44px;
     flex: 0 0 44px;
   }
-  .speed-chip {
-    right: 14px;
-    bottom: 14px;
-    width: 78px;
-    height: 78px;
-  }
-  .speed-chip strong {
-    font-size: 1.9rem;
-  }
 }
 
 /* Thumb controls have their own clear space below the chase camera. */
@@ -710,27 +664,6 @@ button {
 }
 [data-touch='true'] .keyboard-hint {
   display: none;
-}
-[data-touch='true'] .speed-chip {
-  top: calc(max(12px, env(safe-area-inset-top)) + 62px);
-  right: max(12px, env(safe-area-inset-right));
-  bottom: auto;
-  width: auto;
-  height: 42px;
-  display: flex;
-  gap: 5px;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 14px;
-  transform: none;
-}
-[data-touch='true'] .speed-chip svg {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-}
-[data-touch='true'] .speed-chip strong {
-  font-size: 23px;
 }
 [data-touch='true'] .booster-hud {
   top: calc(max(12px, env(safe-area-inset-top)) + 62px);

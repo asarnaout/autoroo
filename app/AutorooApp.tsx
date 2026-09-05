@@ -20,7 +20,6 @@ import {
 } from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
 import {
-  Gauge,
   Pause,
   Play,
   RotateCcw,
@@ -333,7 +332,6 @@ export function AutorooApp() {
     return () => lifecycle.abort();
   }, [restartRun, setPauseState, startRun]);
 
-  const speedMph = Math.round(snapshot.player.speedMps * 2.23694);
   const isPlaying = snapshot.phase === 'running';
   const isOnStartScreen = snapshot.phase === 'ready';
 
@@ -392,11 +390,6 @@ export function AutorooApp() {
             </div>
           </div>
 
-          <div className="speed-chip" aria-label={`${speedMph} miles per hour`}>
-            <Gauge aria-hidden="true" />
-            <strong>{speedMph}</strong>
-            <span>MPH</span>
-          </div>
           <div className="booster-hud" aria-label="Collected boosters">
             <div
               className="booster-slot boing-slot"

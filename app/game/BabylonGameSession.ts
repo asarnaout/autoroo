@@ -54,7 +54,7 @@ import type {
   VehicleKind,
 } from './contracts';
 import { laneMaskAt, roadModuleAt, visualRoadProfileAt } from './generator';
-import { InputBuffer, isGameKey } from './input';
+import { InputBuffer, isGameKey, type DrivingControl } from './input';
 import {
   PLAYER_FLIP_PIVOT_Y_M,
   laneChangeAnimationPose,
@@ -85,6 +85,8 @@ import {
 } from './sceneryLayout';
 import { AutorooSimulation } from './simulation';
 import { shouldPublishRunSnapshot } from './snapshotPublication';
+import { AdaptiveRenderQuality } from './renderQuality';
+import { chaseCameraFraming } from './cameraFraming';
 
 interface SessionCallbacks {
   readonly onReady: () => void;
@@ -224,10 +226,11 @@ export class BabylonGameSession {
   private ready = false;
   private startSpaceHeld = false;
   private muted = false;
-  private resolutionSampleFrames = 0;
-  private resolutionSampleTotalMs = 0;
-  private goodFrameStreak = 0;
-  private scalingLevel: number;
+  private readonly renderQuality: AdaptiveRenderQuality;
+  private touchDriving = false;
+  private viewportWidth = 1;
+  private viewportHeight = 1;
+  private resizeObserver: ResizeObserver | null = null;
   private readonly target = new Vector3();
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
@@ -294,8 +297,18 @@ export class BabylonGameSession {
   };
 
   private readonly onResize = () => {
-    this.scalingLevel = Math.max(1, Math.min(2, window.devicePixelRatio / 1.5));
-    this.engine.setHardwareScalingLevel(this.scalingLevel);
+    this.viewportWidth = this.canvas.clientWidth;
+    this.viewportHeight = this.canvas.clientHeight;
+    if (
+      this.renderQuality.resize({
+        width: this.viewportWidth,
+        height: this.viewportHeight,
+        devicePixelRatio: window.devicePixelRatio,
+      })
+    )
+      this.engine.setHardwareScalingLevel(
+        this.renderQuality.hardwareScalingLevel,
+      );
     this.engine.resize();
   };
 
@@ -305,14 +318,23 @@ export class BabylonGameSession {
     seed = 0xa770_2026,
   ) {
     this.callbacks = callbacks;
-    this.scalingLevel = Math.max(1, Math.min(2, window.devicePixelRatio / 1.5));
+    this.viewportWidth = canvas.clientWidth;
+    this.viewportHeight = canvas.clientHeight;
+    this.renderQuality = new AdaptiveRenderQuality({
+      width: this.viewportWidth,
+      height: this.viewportHeight,
+      devicePixelRatio: window.devicePixelRatio,
+    });
     this.engine = new Engine(canvas, true, {
       preserveDrawingBuffer: false,
       stencil: false,
       antialias: true,
       adaptToDeviceRatio: false,
+      powerPreference: 'high-performance',
     });
-    this.engine.setHardwareScalingLevel(this.scalingLevel);
+    this.engine.setHardwareScalingLevel(
+      this.renderQuality.hardwareScalingLevel,
+    );
     this.scene = new Scene(this.engine);
     const horizonColor = Color3.FromHexString(NIGHT_PALETTE.skyHorizon);
     this.scene.clearColor = new Color4(
@@ -349,8 +371,8 @@ export class BabylonGameSession {
       new Vector3(0.1, 1, 0.15),
       this.scene,
     );
-    sky.intensity = 0.68;
-    sky.diffuse = new Color3(0.44, 0.54, 0.76);
+    sky.intensity = 0.82;
+    sky.diffuse = new Color3(0.62, 0.7, 0.88);
     sky.groundColor = new Color3(0.38, 0.29, 0.18);
     const sun = new DirectionalLight(
       'blue-hour-moon-key',
@@ -410,6 +432,21 @@ export class BabylonGameSession {
     this.audio.setMuted(muted);
   }
 
+  setTouchDriving(enabled: boolean): void {
+    this.touchDriving = enabled;
+    this.input.setAutoAccelerate(enabled);
+  }
+
+  controlDown(control: DrivingControl, source: string): void {
+    if (this.simulation.phaseName !== 'running') return;
+    this.input.press(control, source);
+    void this.audio.wake();
+  }
+
+  controlUp(source: string): void {
+    this.input.release(source);
+  }
+
   snapshot(): RunSnapshot {
     return this.simulation.snapshot();
   }
@@ -421,12 +458,14 @@ export class BabylonGameSession {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.input.clear();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('resize', this.onResize);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.canvas.removeEventListener('pointerdown', this.focusCanvas);
+    this.resizeObserver?.disconnect();
     this.audio.dispose();
     this.scene.dispose();
     this.engine.dispose();
@@ -445,6 +484,8 @@ export class BabylonGameSession {
     window.addEventListener('resize', this.onResize);
     document.addEventListener('visibilitychange', this.onVisibility);
     this.canvas.addEventListener('pointerdown', this.focusCanvas);
+    this.resizeObserver = new ResizeObserver(this.onResize);
+    this.resizeObserver.observe(this.canvas);
   }
 
   private buildNightSky(): void {
@@ -1027,6 +1068,11 @@ export class BabylonGameSession {
           material.emissiveColor = taillight.clone();
         else if (source instanceof PBRMaterial)
           material.emissiveColor = source.emissiveColor.clone();
+        if (bodyNames.has(source.name)) {
+          material.emissiveColor = material.emissiveColor.add(
+            paint.scale(0.06),
+          );
+        }
 
         converted.set(source, material);
       }
@@ -1250,7 +1296,8 @@ export class BabylonGameSession {
 
   private frame(): void {
     if (this.disposed) return;
-    const deltaMs = Math.min(100, this.engine.getDeltaTime());
+    const rawDeltaMs = this.engine.getDeltaTime();
+    const deltaMs = Math.min(100, rawDeltaMs);
     if (this.simulation.phaseName === 'running') {
       this.accumulatorS = Math.min(0.25, this.accumulatorS + deltaMs / 1000);
       let steps = 0;
@@ -1276,7 +1323,17 @@ export class BabylonGameSession {
       this.simulation.phaseName === 'running' && !this.muted,
     );
     this.scene.render();
-    this.sampleResolution(deltaMs);
+    if (
+      this.renderQuality.sample(
+        rawDeltaMs,
+        this.ready &&
+          this.simulation.phaseName === 'running' &&
+          document.visibilityState === 'visible',
+      )
+    )
+      this.engine.setHardwareScalingLevel(
+        this.renderQuality.hardwareScalingLevel,
+      );
   }
 
   private publish(force: boolean): void {
@@ -1366,17 +1423,24 @@ export class BabylonGameSession {
     // Keep the eye and its target on the same centreline. Partial, mismatched
     // lane offsets made the old shot yaw sideways and read as a tilted camera.
     this.camera.position.x = interpolatedX;
+    const framing = chaseCameraFraming(
+      this.viewportWidth,
+      this.viewportHeight,
+      this.touchDriving,
+    );
+    this.camera.position.z = framing.z;
     const flightFollow = Math.max(0, interpolatedY - 4.5) * 0.9;
-    this.camera.position.y = 9.8 + interpolatedY * 0.12 + flightFollow;
+    this.camera.position.y =
+      framing.height + interpolatedY * 0.12 + flightFollow;
     this.camera.fov =
-      0.78 +
+      framing.fov +
       (boosts.rocket
         ? Math.sin((boosts.rocket.elapsedS / 4) * Math.PI) * 0.13
         : 0);
     this.target.set(
       interpolatedX,
       1.3 + interpolatedY * 0.16 + flightFollow,
-      27,
+      framing.targetZ,
     );
     this.camera.setTarget(this.target);
   }
@@ -1685,29 +1749,6 @@ export class BabylonGameSession {
         blocker.absoluteZM - playerZ - 15,
       );
       light.setEnabled(true);
-    }
-  }
-
-  private sampleResolution(deltaMs: number): void {
-    this.resolutionSampleFrames += 1;
-    this.resolutionSampleTotalMs += deltaMs;
-    if (deltaMs < 18) this.goodFrameStreak += 1;
-    else this.goodFrameStreak = 0;
-    if (this.resolutionSampleFrames >= 120) {
-      const average =
-        this.resolutionSampleTotalMs / this.resolutionSampleFrames;
-      if (average > 27 && this.scalingLevel < 2) {
-        this.scalingLevel = Math.min(2, this.scalingLevel + 0.25);
-        this.engine.setHardwareScalingLevel(this.scalingLevel);
-      } else if (this.goodFrameStreak >= 300) {
-        const base = Math.max(1, Math.min(2, window.devicePixelRatio / 1.5));
-        if (this.scalingLevel > base) {
-          this.scalingLevel = Math.max(base, this.scalingLevel - 0.25);
-          this.engine.setHardwareScalingLevel(this.scalingLevel);
-        }
-      }
-      this.resolutionSampleFrames = 0;
-      this.resolutionSampleTotalMs = 0;
     }
   }
 }

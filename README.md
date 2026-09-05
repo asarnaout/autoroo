@@ -7,6 +7,10 @@ object pools, while React owns the HUD and menus.
 
 ## Gameplay
 
+- On phones and tablets, the car accelerates automatically. Tap the left/right
+  buttons to flip lanes, hold **JUMP** to keep hopping, and hold **BRAKE** to slow
+  down. Release and tap JUMP again to use a collected midair jump. Pause and sound
+  controls stay visible in both orientations. Desktop keyboard controls also work.
 - Hold Up to accelerate and Down to brake. Left and Right trigger a quick
   lateral barrel roll into the next active lane, including in the air. The
   physical lane sweep remains collidable, so an evasive move can be too late.
@@ -77,9 +81,13 @@ uncredited models, map/OSM data, and the non-redistributable London double-decke
 See `CREDITS.md` for attribution and modification details and `LICENSE` for the
 preserved MIT notice covering adapted first-party Curbside Rush code.
 
-Rendering uses a 1.5 device-pixel-ratio ceiling, fog-matched draw distance,
-recyclable 40 m road tiles, pooled model instances, numeric swept colliders,
-10 Hz HUD publishing, and adaptive resolution after sustained frame loss.
+Rendering starts at device resolution up to 3× within a 3.5-million-pixel budget,
+with antialiasing and a CSS-pixel resolution floor. Sustained frame loss lowers
+resolution gradually; stable performance restores it. Loading, background tabs,
+and resume stalls do not reduce quality. The portrait chase camera reserves room
+for thumb controls, and the canvas follows the dynamic viewport and safe areas.
+Fog-matched draw distance, recyclable 40 m road tiles, pooled model instances,
+numeric swept colliders, and 10 Hz HUD publishing bound the remaining work.
 
 Booster creatures are original Babylon meshes in `app/game/boosterVisuals.ts`,
 merged by material and instanced into a fixed six-slot pool. Particles and

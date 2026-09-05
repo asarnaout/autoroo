@@ -3,12 +3,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { GameEvent, RunSnapshot } from './contracts';
 import { BabylonGameSession } from './BabylonGameSession';
+import type { DrivingControl } from './input';
 
 export interface GameCanvasHandle {
   start(): void;
   restart(): void;
   setPaused(paused: boolean): void;
   setMuted(muted: boolean): void;
+  setTouchDriving(enabled: boolean): void;
+  controlDown(control: DrivingControl, source: string): void;
+  controlUp(source: string): void;
   snapshot(): RunSnapshot | null;
   isReady(): boolean;
 }
@@ -48,6 +52,15 @@ const GameCanvas = forwardRef<GameCanvasHandle, GameCanvasProps>(
         },
         setMuted(value) {
           sessionRef.current?.setMuted(value);
+        },
+        setTouchDriving(enabled) {
+          sessionRef.current?.setTouchDriving(enabled);
+        },
+        controlDown(control, source) {
+          sessionRef.current?.controlDown(control, source);
+        },
+        controlUp(source) {
+          sessionRef.current?.controlUp(source);
         },
         snapshot() {
           return sessionRef.current?.snapshot() ?? null;

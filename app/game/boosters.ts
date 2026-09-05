@@ -24,7 +24,7 @@ export const BOOSTER_INFO = {
     name: 'Boing!',
     rarity: 'Common',
     color: '#b4ff49',
-    instruction: 'One extra jump. Tap Space again in midair.',
+    instruction: 'One extra jump. Tap JUMP (or Space) again in midair.',
   },
   rocket: {
     name: 'Yeet Rocket',

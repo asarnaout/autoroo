@@ -1,6 +1,15 @@
 import type { InputFrame } from './contracts';
 
 export type InputAction = 'pause' | 'restart' | null;
+export type DrivingControl = 'accelerate' | 'brake' | 'left' | 'right' | 'jump';
+
+const KEY_CONTROLS: Readonly<Record<string, DrivingControl>> = {
+  ArrowUp: 'accelerate',
+  ArrowDown: 'brake',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  Space: 'jump',
+};
 
 const GAME_KEYS = new Set([
   'ArrowUp',
@@ -14,44 +23,58 @@ const GAME_KEYS = new Set([
 ]);
 
 export class InputBuffer {
-  private accelerate = false;
-  private brake = false;
+  private readonly held = new Map<string, DrivingControl>();
+  private autoAccelerate = false;
   private readonly laneQueue: (-1 | 1)[] = [];
   private jumpQueued = false;
-  private jumpHeld = false;
+
+  setAutoAccelerate(enabled: boolean): void {
+    this.autoAccelerate = enabled;
+  }
+
+  press(control: DrivingControl, source: string): void {
+    if (this.held.has(source)) return;
+    this.held.set(source, control);
+    if (control === 'jump') this.jumpQueued = true;
+    if (this.laneQueue.length < 4) {
+      if (control === 'left') this.laneQueue.push(-1);
+      if (control === 'right') this.laneQueue.push(1);
+    }
+  }
+
+  release(source: string): void {
+    this.held.delete(source);
+  }
+
+  private isHeld(control: DrivingControl): boolean {
+    for (const value of this.held.values()) {
+      if (value === control) return true;
+    }
+    return false;
+  }
 
   keyDown(code: string, repeat = false): InputAction {
-    if (code === 'ArrowUp') this.accelerate = true;
-    if (code === 'ArrowDown') this.brake = true;
-    if (code === 'Space') {
-      if (!repeat && !this.jumpHeld) this.jumpQueued = true;
-      this.jumpHeld = true;
-    }
+    const control = KEY_CONTROLS[code];
+    if (control && !repeat) this.press(control, `keyboard:${code}`);
     if (repeat) return null;
 
-    if (code === 'ArrowLeft' && this.laneQueue.length < 4)
-      this.laneQueue.push(-1);
-    if (code === 'ArrowRight' && this.laneQueue.length < 4)
-      this.laneQueue.push(1);
     if (code === 'Escape') return 'pause';
     if (code === 'Enter' || code === 'KeyR') return 'restart';
     return null;
   }
 
   keyUp(code: string): void {
-    if (code === 'ArrowUp') this.accelerate = false;
-    if (code === 'ArrowDown') this.brake = false;
-    if (code === 'Space') this.jumpHeld = false;
+    this.release(`keyboard:${code}`);
   }
 
   consume(): InputFrame {
     const laneDelta = this.laneQueue.shift() ?? 0;
-    const jumpPressed = this.jumpQueued || this.jumpHeld;
+    const jumpPressed = this.jumpQueued || this.isHeld('jump');
     const jumpTapped = this.jumpQueued;
     this.jumpQueued = false;
     return {
-      accelerate: this.accelerate,
-      brake: this.brake,
+      accelerate: this.autoAccelerate || this.isHeld('accelerate'),
+      brake: this.isHeld('brake'),
       laneDelta,
       jumpPressed,
       jumpTapped,
@@ -59,11 +82,9 @@ export class InputBuffer {
   }
 
   clear(): void {
-    this.accelerate = false;
-    this.brake = false;
+    this.held.clear();
     this.laneQueue.length = 0;
     this.jumpQueued = false;
-    this.jumpHeld = false;
   }
 }
 

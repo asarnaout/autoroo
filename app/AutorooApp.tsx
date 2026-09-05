@@ -39,6 +39,8 @@ import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
 import type { GameCanvasHandle, GameCanvasProps } from './game/GameCanvas';
 import { loadBest, saveBest } from './game/persistence';
+import { TouchControls, TOUCH_CONTROLS_QUERY } from './game/TouchControls';
+import type { DrivingControl } from './game/input';
 
 const GameCanvas = dynamic<GameCanvasProps & RefAttributes<GameCanvasHandle>>(
   () => import('./game/GameCanvas'),
@@ -121,6 +123,29 @@ export function AutorooApp() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [muted, setMuted] = useState(false);
   const [scoreDelta, setScoreDelta] = useState(0);
+  const [touchDriving, setTouchDriving] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia(TOUCH_CONTROLS_QUERY);
+    const update = () => setTouchDriving(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+
+  useEffect(() => {
+    gameRef.current?.setTouchDriving(touchDriving);
+  }, [touchDriving, sceneReady]);
+
+  const onControlPress = useCallback(
+    (control: DrivingControl, source: string) => {
+      gameRef.current?.controlDown(control, source);
+    },
+    [],
+  );
+  const onControlRelease = useCallback((source: string) => {
+    gameRef.current?.controlUp(source);
+  }, []);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -182,8 +207,9 @@ export function AutorooApp() {
 
   const startRun = useCallback(() => {
     clearScoreDelta();
+    gameRef.current?.setTouchDriving(touchDriving);
     gameRef.current?.start();
-  }, [clearScoreDelta]);
+  }, [clearScoreDelta, touchDriving]);
 
   const restartRun = useCallback(() => {
     clearScoreDelta();
@@ -314,7 +340,11 @@ export function AutorooApp() {
   const isOnStartScreen = snapshot.phase === 'ready';
 
   return (
-    <main className="autoroo-shell" data-phase={snapshot.phase}>
+    <main
+      className="autoroo-shell"
+      data-phase={snapshot.phase}
+      data-touch={touchDriving}
+    >
       <GameCanvas
         ref={gameRef}
         muted={muted}
@@ -379,7 +409,9 @@ export function AutorooApp() {
                 <strong>Boing!</strong>
                 <small>
                   {snapshot.boosters.doubleJumpReady
-                    ? 'Space again in midair'
+                    ? touchDriving
+                      ? 'Tap JUMP again'
+                      : 'Space again in midair'
                     : 'Find a spring'}
                 </small>
               </span>
@@ -430,6 +462,14 @@ export function AutorooApp() {
             </output>
           )}
         </>
+      )}
+
+      {isPlaying && touchDriving && (
+        <TouchControls
+          onPress={onControlPress}
+          onRelease={onControlRelease}
+          hasMoved={snapshot.player.maxForwardM > 6}
+        />
       )}
 
       {isOnStartScreen && (
@@ -531,30 +571,47 @@ export function AutorooApp() {
               </div>
             </div>
 
-            <div className="start-controls" aria-label="Keyboard controls">
-              <span className="start-control">
-                <span className="start-keys">
-                  <Kbd>←</Kbd>
-                  <Kbd>→</Kbd>
+            {touchDriving ? (
+              <div
+                className="start-controls start-touch-guide"
+                aria-label="Touch controls"
+              >
+                <span>
+                  <strong>AUTO-DRIVE</strong>We handle the gas.
                 </span>
-                <span>Flip lanes</span>
-              </span>
-              <span className="start-control">
-                <span className="start-keys">
-                  <Kbd>↑</Kbd>
-                  <Kbd>↓</Kbd>
+                <span>
+                  <strong>← STEER →</strong>Tap to flip lanes.
                 </span>
-                <span>Speed</span>
-              </span>
-              <span className="start-control">
-                <Kbd className="space-key">Space</Kbd>
-                <span>Jump</span>
-              </span>
-              <span className="start-control">
-                <Kbd>Esc</Kbd>
-                <span>Pause</span>
-              </span>
-            </div>
+                <span>
+                  <strong>JUMP</strong>Hold to keep hopping.
+                </span>
+              </div>
+            ) : (
+              <div className="start-controls" aria-label="Keyboard controls">
+                <span className="start-control">
+                  <span className="start-keys">
+                    <Kbd>←</Kbd>
+                    <Kbd>→</Kbd>
+                  </span>
+                  <span>Flip lanes</span>
+                </span>
+                <span className="start-control">
+                  <span className="start-keys">
+                    <Kbd>↑</Kbd>
+                    <Kbd>↓</Kbd>
+                  </span>
+                  <span>Speed</span>
+                </span>
+                <span className="start-control">
+                  <Kbd className="space-key">Space</Kbd>
+                  <span>Jump</span>
+                </span>
+                <span className="start-control">
+                  <Kbd>Esc</Kbd>
+                  <span>Pause</span>
+                </span>
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -570,7 +627,7 @@ export function AutorooApp() {
           <Button className="play-button" onClick={() => setPauseState(false)}>
             <Play fill="currentColor" /> Resume
           </Button>
-          <p className="key-hint">
+          <p className="key-hint keyboard-hint">
             or press <Kbd>Esc</Kbd>
           </p>
           <CreditsDialog />
@@ -596,7 +653,7 @@ export function AutorooApp() {
           <Button className="play-button" onClick={restartRun}>
             <RotateCcw /> Drive again
           </Button>
-          <p className="key-hint">
+          <p className="key-hint keyboard-hint">
             press <Kbd>Enter</Kbd> or <Kbd>R</Kbd>
           </p>
         </section>
@@ -604,7 +661,13 @@ export function AutorooApp() {
 
       {isPlaying && snapshot.rearWarning && (
         <div className="rear-warning" role="alert">
-          TRAFFIC CATCHING UP — HOLD <Kbd>↑</Kbd>
+          {touchDriving ? (
+            'TRAFFIC CATCHING UP — RELEASE BRAKE'
+          ) : (
+            <>
+              TRAFFIC CATCHING UP — HOLD <Kbd>↑</Kbd>
+            </>
+          )}
         </div>
       )}
 
@@ -695,9 +758,9 @@ function BoostersDialog() {
           );
         })}
         <p className="credits-footnote">
-          Boing! works even while falling. Release Space and press again to use
-          it. Holding Space still auto-hops after landing. Rockets handle the
-          steering until touchdown.
+          Boing! works even while falling. Release JUMP (or Space) and press
+          again to use it. Holding JUMP keeps hopping after landing. Rockets
+          handle the steering until touchdown.
         </p>
       </DialogContent>
     </Dialog>

@@ -244,6 +244,8 @@ button {
   background: #0e1a33;
   isolation: isolate;
   user-select: none;
+  height: 100dvh;
+  overscroll-behavior: none;
 }
 
 .game-canvas {
@@ -271,9 +273,9 @@ button {
 .hud-top {
   position: absolute;
   z-index: 10;
-  top: 20px;
-  left: 22px;
-  right: 22px;
+  top: max(20px, env(safe-area-inset-top));
+  left: max(22px, env(safe-area-inset-left));
+  right: max(22px, env(safe-area-inset-right));
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -287,7 +289,6 @@ button {
   background: rgb(255 250 240 / 93%) !important;
   box-shadow: 0 6px 0 rgb(20 43 60 / 22%);
   color: #172b3a !important;
-  backdrop-filter: blur(10px);
 }
 
 .score-chip {
@@ -584,9 +585,9 @@ button {
 
 @media (max-width: 760px) {
   .hud-top {
-    top: 12px;
-    left: 12px;
-    right: 12px;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
     gap: 7px;
   }
   .score-chip {
@@ -600,7 +601,9 @@ button {
     font-size: 0.53rem;
   }
   .hud-icon-button {
-    display: none;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
   }
   .speed-chip {
     right: 14px;
@@ -610,6 +613,229 @@ button {
   }
   .speed-chip strong {
     font-size: 1.9rem;
+  }
+}
+
+/* Thumb controls have their own clear space below the chase camera. */
+.touch-controls {
+  margin: 0;
+  border: 0;
+  min-width: 0;
+  position: absolute;
+  z-index: 15;
+  inset: auto 0 0;
+  height: calc(178px + env(safe-area-inset-bottom));
+  padding: 26px max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  background: linear-gradient(
+    transparent,
+    rgb(7 17 35 / 45%) 40%,
+    rgb(7 17 35 / 88%)
+  );
+  pointer-events: none;
+  -webkit-touch-callout: none;
+}
+.touch-drive-hint {
+  position: absolute;
+  top: 5px;
+  left: 0;
+  right: 0;
+  margin: 0;
+  color: #c7f2ce;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-shadow: 0 2px 4px #071123;
+}
+.touch-steering {
+  display: grid;
+  grid-template-columns: repeat(2, 64px);
+  gap: 10px;
+}
+.touch-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 64px;
+  padding: 8px;
+  border: 2px solid #9daec4;
+  border-radius: 20px;
+  background: #22334e;
+  color: #fff5d6;
+  box-shadow:
+    0 5px 0 #071123,
+    inset 0 2px 0 rgb(255 255 255 / 12%);
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.touch-button svg {
+  width: 28px;
+  height: 28px;
+}
+.touch-button span {
+  order: 2;
+  font-size: 12px;
+  font-weight: 950;
+  letter-spacing: 0.06em;
+}
+.touch-button small {
+  order: 3;
+  font-size: 10px;
+  font-weight: 900;
+}
+.touch-button[data-pressed='true'] {
+  transform: translateY(4px);
+  box-shadow:
+    0 1px 0 #071123,
+    inset 0 2px 8px rgb(0 0 0 / 25%);
+  border-color: #fff5d6;
+  background: #406184;
+}
+.touch-button:focus-visible {
+  outline: 3px solid #fff5d6;
+  outline-offset: 4px;
+}
+.touch-brake {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  flex-direction: row;
+  gap: 7px;
+  border-radius: 14px;
+}
+.touch-brake svg {
+  width: 20px;
+  height: 20px;
+  color: #ffb6a6;
+}
+.touch-jump {
+  width: 112px;
+  height: 112px;
+  gap: 0;
+  border: 3px solid #fff4ab;
+  border-radius: 36px;
+  background: linear-gradient(#fff27b, #ffd238);
+  color: #17243d;
+  box-shadow:
+    0 6px 0 #967229,
+    inset 0 3px 0 #fff8c2;
+}
+.touch-jump svg {
+  width: 38px;
+  height: 38px;
+}
+.touch-jump span {
+  font:
+    26px/1.1 'Lilita One',
+    sans-serif;
+  letter-spacing: 0.03em;
+}
+.touch-jump[data-pressed='true'] {
+  background: #ffc52f;
+}
+[data-touch='true'] .keyboard-hint {
+  display: none;
+}
+[data-touch='true'] .speed-chip {
+  top: calc(max(12px, env(safe-area-inset-top)) + 62px);
+  right: max(12px, env(safe-area-inset-right));
+  bottom: auto;
+  width: auto;
+  height: 42px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 14px;
+  transform: none;
+}
+[data-touch='true'] .speed-chip svg {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+[data-touch='true'] .speed-chip strong {
+  font-size: 23px;
+}
+[data-touch='true'] .booster-hud {
+  top: calc(max(12px, env(safe-area-inset-top)) + 62px);
+  left: max(12px, env(safe-area-inset-left));
+  bottom: auto;
+  flex-direction: row;
+  gap: 6px;
+}
+[data-touch='true'] .booster-slot {
+  min-height: 42px;
+  padding: 6px 9px;
+  gap: 5px;
+  border-radius: 12px;
+}
+[data-touch='true'] .booster-slot span {
+  display: none;
+}
+[data-touch='true'] .booster-slot svg {
+  width: 21px;
+  height: 21px;
+}
+[data-touch='true'] .booster-slot b {
+  font-size: 17px;
+}
+[data-touch='true'] .booster-notice {
+  top: calc(max(12px, env(safe-area-inset-top)) + 116px);
+}
+[data-touch='true'] .rear-warning {
+  bottom: calc(192px + env(safe-area-inset-bottom));
+  max-width: calc(100% - 32px);
+  width: max-content;
+  text-align: center;
+  font-size: 12px;
+}
+@media (max-width: 380px) {
+  .hud-top {
+    gap: 4px;
+  }
+  .score-chip {
+    min-width: 74px;
+    padding: 7px 6px;
+  }
+  .score-chip span {
+    letter-spacing: 0.06em;
+  }
+}
+@media (max-height: 500px) and (min-aspect-ratio: 1/1) {
+  .touch-controls {
+    height: calc(142px + env(safe-area-inset-bottom));
+    padding-top: 8px;
+  }
+  .touch-drive-hint {
+    top: auto;
+    bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .touch-steering {
+    grid-template-columns: 60px 60px;
+    gap: 7px;
+  }
+  .touch-button {
+    min-height: 54px;
+  }
+  .touch-brake {
+    min-height: 44px;
+  }
+  .touch-jump {
+    width: 100px;
+    height: 100px;
+  }
+  [data-touch='true'] .rear-warning {
+    bottom: 50px;
+    max-width: 40%;
   }
 }
 

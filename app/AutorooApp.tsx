@@ -32,7 +32,6 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { BOOSTER_INFO, makeBoosterState } from './game/boosters';
-import { ASSET_CREDITS } from './game/assets';
 import { LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
@@ -588,17 +587,13 @@ export function AutorooApp() {
           className="overlay-card compact-card"
           aria-labelledby="paused-title"
         >
-          <p className="eyebrow">PARKED, TECHNICALLY</p>
           <h2 id="paused-title">Paused</h2>
-          <p>Your streak is safe. The traffic is pretending not to stare.</p>
           <Button className="play-button" onClick={() => setPauseState(false)}>
             <Play fill="currentColor" /> Resume
           </Button>
           <p className="key-hint keyboard-hint">
             or press <Kbd>Esc</Kbd>
           </p>
-          <CreditsDialog />
-          <BoostersDialog />
         </section>
       )}
 
@@ -634,51 +629,6 @@ export function AutorooApp() {
             : ''}
       </div>
     </main>
-  );
-}
-
-function CreditsDialog() {
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button variant="ghost" size="sm" />}>
-        Credits
-      </DialogTrigger>
-      <DialogContent className="credits-dialog">
-        <DialogHeader>
-          <DialogTitle>Asset credits</DialogTitle>
-          <DialogDescription>
-            Every imported model and music track is pinned to a credit and
-            SHA-256 hash. CC0 credits are retained voluntarily.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="credits-list">
-          {ASSET_CREDITS.map((credit) => (
-            <article key={credit.file} className="credit-row">
-              <h3>{credit.title}</h3>
-              <p>
-                by {credit.author} ·{' '}
-                <a href={credit.source} target="_blank" rel="noreferrer">
-                  source
-                </a>{' '}
-                ·{' '}
-                <a href={credit.licenseUrl} target="_blank" rel="noreferrer">
-                  {credit.license}
-                </a>
-              </p>
-              <p className="credit-note">{credit.modificationNotes}</p>
-              <code>{credit.file.split('/').at(-1)}</code>
-            </article>
-          ))}
-        </div>
-        <p className="credits-footnote">
-          Booster creatures, animations, and sound effects are original
-          procedural Autoroo assets. No third-party booster models, textures, or
-          audio samples are used. Adapted procedural road and presentation
-          techniques retain Curbside Rush’s MIT notice. The purchased London
-          double-decker and all map/OSM data are explicitly excluded.
-        </p>
-      </DialogContent>
-    </Dialog>
   );
 }
 

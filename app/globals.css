@@ -419,6 +419,9 @@ button {
 .compact-card {
   width: min(380px, calc(100% - 36px));
 }
+.compact-card .play-button {
+  margin-top: 24px;
+}
 .crash-score {
   display: grid;
   margin: 20px 0 24px;
@@ -458,43 +461,6 @@ button {
   user-select: text;
 }
 
-.credits-list {
-  display: grid;
-  gap: 9px;
-  margin-top: 6px;
-}
-.credit-row {
-  border: 1px solid rgb(20 43 60 / 14%);
-  border-radius: 12px;
-  padding: 10px 12px;
-  background: rgb(255 255 255 / 55%);
-}
-.credit-row h3 {
-  margin: 0;
-  font-size: 0.9rem;
-}
-.credit-row p {
-  margin: 3px 0;
-  color: #526776;
-  font-size: 0.72rem;
-  line-height: 1.45;
-}
-.credit-row a {
-  color: #4e3fa4;
-  font-weight: 850;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.credit-row .credit-note {
-  color: #6c7c86;
-}
-.credit-row code {
-  display: block;
-  margin-top: 5px;
-  overflow-wrap: anywhere;
-  color: #253b4a;
-  font-size: 0.64rem;
-}
 .credits-footnote {
   margin: 10px 0 0;
   color: #536775;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCELERATION_MPS2,
   FIXED_DT,
+  GATE_MIN_SPACING_M,
   GATE_FORWARD_STEADY_M,
   GATE_LANDING_CLEAR_M,
   JUMP_APEX_M,
@@ -611,14 +612,14 @@ describe('lane movement and collision/scoring rules', () => {
 });
 
 describe('winnability certificates', () => {
-  it('keeps the compact arc human-tolerant for gates and just bus-clearable at full speed', () => {
+  it('keeps forgiving car jumps but allows narrow bus gates at full speed', () => {
     const car = computeGateWindow('sedan', 4, 28);
     const suv = computeGateWindow('suv', 3, 28);
     const bus = computeGateWindow('bus', 8, MAX_SPEED_MPS);
     expect(JUMP_APEX_M).toBeCloseTo(4.41, 2);
     expect(JUMP_FLIGHT_SECONDS).toBeCloseTo(0.84, 3);
-    expect(car.minimumSpeedMps).toBeCloseTo(26.89, 1);
-    expect(suv.minimumSpeedMps).toBeCloseTo(27.91, 1);
+    expect(car.minimumSpeedMps).toBeLessThan(28);
+    expect(suv.minimumSpeedMps).toBeLessThan(28);
     expect(car.inputWindowS).toBeGreaterThanOrEqual(0.25);
     expect(suv.inputWindowS).toBeGreaterThanOrEqual(0.25);
     expect(car.feasible && suv.feasible).toBe(true);
@@ -714,7 +715,7 @@ describe('winnability certificates', () => {
       0,
       gateMask,
       initialTarget,
-      11,
+      7,
       0,
     );
     const request = {
@@ -727,9 +728,9 @@ describe('winnability certificates', () => {
         maxForwardM: gateZM - 110,
       }),
       gateZM,
-      kind: 'sedan' as const,
+      kind: 'bus' as const,
       blockerSpeedMps: 0,
-      targetSpeedMps: 28,
+      targetSpeedMps: MAX_SPEED_MPS,
       maneuverPlan,
     };
     const certificate = certifyJumpGate(request);
@@ -992,7 +993,9 @@ describe('winnability certificates', () => {
     }
     const next = simulation.debugGateState();
     expect(next.pendingGateAttempted).toBe(false);
-    expect(next.pendingGateZM).toBeGreaterThanOrEqual(invalidGateZM + 500);
+    expect(next.pendingGateZM).toBeGreaterThanOrEqual(
+      invalidGateZM + GATE_MIN_SPACING_M,
+    );
     expect(next.activeCertificate).toBeNull();
     expect(
       simulation.renderTraffic.some((vehicle) => vehicle.role === 'gate'),

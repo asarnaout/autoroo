@@ -248,22 +248,26 @@ export function ordinaryGapM(
   difficulty: number,
 ): number {
   const boundedDifficulty = Math.max(0, Math.min(1, difficulty));
-  const jitter = (hashUnit(seed, encounterIndex, 97) - 0.5) * 4;
-  // Late rows arrive only 0.93-1.07 seconds apart at maximum closing speed:
-  // just beyond one 0.85 second auto-hop, with little idle landing time. The
-  // exact production witness still rejects any unsafe deterministic draft.
-  return 46 - 18 * boundedDifficulty + jitter;
+  const jitter = (hashUnit(seed, encounterIndex, 97) - 0.5) * 2;
+  // Late rows arrive 0.47–0.53 seconds apart at full closing speed. A jump
+  // spans more than one row, and the blocked corridor changes before landing.
+  // The production witness rejects drafts without a viable lateral route.
+  return 34 - 18 * boundedDifficulty + jitter;
+}
+
+/** Slower late traffic increases closing speed without speeding up controls. */
+export function ordinarySpeedMps(difficulty: number): number {
+  return 8 - 4 * Math.max(0, Math.min(1, difficulty));
 }
 
 export function firstGateDistance(seed: number): number {
-  return 650 + hashUnit(seed, 0, 211) * 80;
+  return 420 + hashUnit(seed, 0, 211) * 40;
 }
 
 /**
  * Advances the one live gate cursor in constant time. Gaps smoothly contract
- * from roughly 800 m toward a bounded 550–620 m cadence. Road nudging and
- * the 500 m exclusion still prevent overlap while keeping mixed sequences
- * recurring instead of kilometre-scale set pieces.
+ * from roughly 600 m toward a 490–530 m cadence before road nudging. Compact
+ * reservations let challenges use the shorter two- and three-lane sections.
  */
 export function nextGateDistance(
   seed: number,
@@ -272,7 +276,7 @@ export function nextGateDistance(
 ): number {
   const difficulty = 1 - Math.exp(-Math.max(0, previousPlacedM) / 900);
   const gapM =
-    550 + 250 * (1 - difficulty) + hashUnit(seed, gateIndex, 223) * 70;
+    490 + 100 * (1 - difficulty) + hashUnit(seed, gateIndex, 223) * 40;
   return previousPlacedM + gapM;
 }
 
@@ -283,10 +287,10 @@ export function nextGateDistance(
 export function scheduledGateDistance(seed: number, gateIndex: number): number {
   if (gateIndex <= 0) return firstGateDistance(seed);
   const index = Math.floor(gateIndex);
-  const asymptoticProgress = 220 * (1 - Math.exp(-index / 4));
+  const asymptoticProgress = 90 * (1 - Math.exp(-index / 4));
   return (
     firstGateDistance(seed) +
-    index * 550 +
+    index * 490 +
     asymptoticProgress +
     hashUnit(seed, index, 223) * 12
   );
@@ -341,11 +345,12 @@ export function nudgeGateToSteadyRoad(
   seed: number,
   requestedM: number,
   minimumM = 600,
+  forwardClearM = GATE_FORWARD_STEADY_M,
 ): number | null {
-  const originM = Math.max(600, minimumM, requestedM);
-  const floorM = Math.max(600, minimumM);
+  const originM = Math.max(minimumM, requestedM);
+  const floorM = minimumM;
   // Search symmetrically around the difficulty target. Looking backward (but
-  // never inside the 500 m exclusion) avoids phase-locking short late-game gaps
+  // never inside the requested exclusion) avoids phase-locking short gaps
   // to the following topology epoch.
   for (let attempt = 0; attempt < 2000; attempt += 1) {
     const offsetM = attempt * (MODULE_LENGTH_M / 20);
@@ -356,7 +361,7 @@ export function nudgeGateToSteadyRoad(
       isSteadyRoadRange(
         seed,
         backwardM - GATE_APPROACH_CLEAR_M,
-        backwardM + GATE_FORWARD_STEADY_M,
+        backwardM + forwardClearM,
       )
     ) {
       return backwardM;
@@ -366,7 +371,7 @@ export function nudgeGateToSteadyRoad(
       isSteadyRoadRange(
         seed,
         forwardM - GATE_APPROACH_CLEAR_M,
-        forwardM + GATE_FORWARD_STEADY_M,
+        forwardM + forwardClearM,
       )
     ) {
       return forwardM;

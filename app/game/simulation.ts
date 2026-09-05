@@ -3,6 +3,8 @@ import {
   FIXED_DT,
   GATE_APPROACH_CLEAR_M,
   GATE_FORWARD_STEADY_M,
+  GATE_SEQUENCE_FORWARD_M,
+  GATE_MIN_SPACING_M,
   GATE_LANDING_CLEAR_M,
   GATE_WITNESS_LIMIT_S,
   GRAVITY_MPS2,
@@ -58,6 +60,7 @@ import {
   nextActiveLane,
   nudgeGateToSteadyRoad,
   ordinaryGapM,
+  ordinarySpeedMps,
   roadModuleForDistance,
 } from './generator';
 import { hashParts, hashUnit, stableHash } from './random';
@@ -80,8 +83,8 @@ const GATE_REVEAL_M = 340;
 const GATE_RETRY_STEP_M = 5;
 const GATE_DRAFT_STAGES = 8;
 const GATE_APPROACH_TARGET_FLAG = 1 << 2;
-const POST_GATE_TRAFFIC_START_M = GATE_FORWARD_STEADY_M + 4;
-const MAX_PENDING_GATE_BLOCKERS = 29;
+const POST_GATE_TRAFFIC_START_M = GATE_SEQUENCE_FORWARD_M + 4;
+const MAX_PENDING_GATE_BLOCKERS = 24;
 
 interface GroundRoute {
   certificate: ChallengeCertificate;
@@ -141,7 +144,7 @@ interface PreparedGateReplays {
   readonly prefixWitness: readonly WitnessTracePoint[];
 }
 
-type GateWitnessControl = 'canonical' | 'no-jump' | 'fixed-lane';
+type GateWitnessControl = 'canonical' | 'no-jump' | 'fixed-lane' | 'hold-jump';
 
 const WORLD_JUMPED = 1 << 0;
 const WORLD_CRASHED = 1 << 1;
@@ -267,9 +270,8 @@ export function jumpChainOffsetsM(
 }
 
 /**
- * Interleaves apex-height full rows with low landing beats. Each landing beat
- * blocks the lane used for the preceding jump and only then unlocks an
- * adjacent target, so a fixed-lane held jump is not a winning trace.
+ * Bus walls demand timed jumps; intervening rows leave exactly one lane open.
+ * Late sequences add consecutive dodges, with no automatic-hop timing shortcut.
  */
 export function mixedPressureManeuvers(
   seed: number,
@@ -278,24 +280,32 @@ export function mixedPressureManeuvers(
   startingLane: LaneIndex,
   rowCount: number,
   blockerSpeedMps: number,
-  jumpStride = 2,
+  difficulty = 1,
 ): readonly ChallengeManeuver[] {
   const lanes = activeLanes(gateMask);
-  const count = Math.max(3, Math.min(MAX_GATE_ROWS, Math.floor(rowCount)));
+  const count = Math.max(3, Math.min(7, Math.floor(rowCount)));
   const relativeSpeedMps = Math.max(0, MAX_SPEED_MPS - blockerSpeedMps);
-  const hopCycleS = Math.ceil(JUMP_FLIGHT_SECONDS / FIXED_DT) * FIXED_DT;
-  const halfBeatM = (relativeSpeedMps * hopCycleS) / 2;
+  const pressure = Math.max(0, Math.min(1, difficulty));
+  const jumpIntervalTicks = Math.round(78 - 12 * pressure);
+  const dodgeDelayTicks = Math.round(36 - 3 * pressure);
   let targetLane = nearestActiveLane(gateMask, startingLane);
   let direction: -1 | 1 =
     hashParts(seed, sequenceIndex, 431) % 2 === 0 ? -1 : 1;
   const plan: ChallengeManeuver[] = [];
 
   for (let rowIndex = 0; rowIndex < count; rowIndex += 1) {
-    const isJumpBeat = rowIndex % Math.max(2, Math.floor(jumpStride)) === 0;
+    const doubleDodge = count === 7;
+    const beat = rowIndex % (doubleDodge ? 3 : 2);
+    const isJumpBeat = beat === 0;
+    const offsetTicks = doubleDodge
+      ? Math.floor(rowIndex / 3) * 96 + beat * 33
+      : Math.floor(rowIndex / 2) * jumpIntervalTicks +
+        (isJumpBeat ? 0 : dodgeDelayTicks);
+    const offsetM = offsetTicks * FIXED_DT * relativeSpeedMps;
     if (isJumpBeat) {
       plan.push(
         Object.freeze({
-          offsetM: rowIndex * halfBeatM,
+          offsetM,
           blockedLaneMask: gateMask,
           action: 'jump' as const,
           targetLane,
@@ -305,28 +315,20 @@ export function mixedPressureManeuvers(
     }
 
     const previousLane = targetLane;
-    const changesLane = rowIndex % 2 === 1;
-    let blockedLane = lanes.find((lane) => lane !== targetLane) ?? targetLane;
-    if (changesLane) {
-      let nextLane = (previousLane + direction) as LaneIndex;
-      if (!lanes.includes(nextLane)) {
-        direction = direction === 1 ? -1 : 1;
-        nextLane = (previousLane + direction) as LaneIndex;
-      }
-      if (!lanes.includes(nextLane)) {
-        const alternatives = lanes.filter((lane) => lane !== previousLane);
-        nextLane = alternatives[0] ?? previousLane;
-      }
-      targetLane = nextLane;
-      blockedLane = previousLane;
+    let nextLane = (previousLane + direction) as LaneIndex;
+    if (!lanes.includes(nextLane)) {
+      direction = direction === 1 ? -1 : 1;
+      nextLane = (previousLane + direction) as LaneIndex;
     }
-    // Alternating focused traps demand one decisive lane flip per hop cycle;
-    // the rows between them keep the jam visually packed without requiring an
-    // unrealistic new steering command every half-hop.
-    const blockedLaneMask = 1 << blockedLane;
+    if (!lanes.includes(nextLane)) {
+      const alternatives = lanes.filter((lane) => lane !== previousLane);
+      nextLane = alternatives[0] ?? previousLane;
+    }
+    targetLane = nextLane;
+    const blockedLaneMask = gateMask & ~(1 << targetLane);
     plan.push(
       Object.freeze({
-        offsetM: rowIndex * halfBeatM,
+        offsetM,
         blockedLaneMask,
         action: 'dodge' as const,
         targetLane,
@@ -334,6 +336,26 @@ export function mixedPressureManeuvers(
     );
   }
   return Object.freeze(plan);
+}
+
+/** Inputs for the certified route, expressed in the caller's tick clock. */
+export function gateJumpPressedAt(
+  plan: readonly Pick<ChallengeManeuver, 'offsetM' | 'action'>[],
+  blockerSpeedMps: number,
+  tick: number,
+  firstJumpTick: number,
+): boolean {
+  // Legacy all-jump chains still certify consecutive held hops. Mixed gates
+  // instead require a fresh, precisely scheduled takeoff at every jump wall.
+  if (!plan.some((row) => row.action === 'dodge')) return tick >= firstJumpTick;
+  const closingSpeedMps = MAX_SPEED_MPS - blockerSpeedMps;
+  if (closingSpeedMps <= 0) return false;
+  return plan.some(
+    (row) =>
+      row.action === 'jump' &&
+      tick ===
+        firstJumpTick + Math.round(row.offsetM / closingSpeedMps / FIXED_DT),
+  );
 }
 
 export function createTrafficVehicle(
@@ -428,7 +450,7 @@ export function computeGateWindow(
       : 0;
   return {
     feasible:
-      minimumSpeedMps <= 28 &&
+      minimumSpeedMps <= MAX_SPEED_MPS &&
       playerSpeedMps >= minimumSpeedMps &&
       inputWindowS >= MIN_SPACE_WINDOW_S,
     tLowS,
@@ -980,7 +1002,8 @@ function witnessInput(
   let laneDelta: -1 | 0 | 1 = 0;
   if (
     (localTick >= 45 || continuingRevealedRoute) &&
-    localTick % LANE_COMMAND_INTERVAL_TICKS === 0 &&
+    (continuingRevealedRoute ||
+      localTick % LANE_COMMAND_INTERVAL_TICKS === 0) &&
     player.lane !== targetLane &&
     player.queuedLane !== targetLane
   ) {
@@ -1112,7 +1135,7 @@ function certifyGate(
     return null;
   }
   const targetMath = computeGateWindow(kind, blockerSpeedMps, targetSpeedMps);
-  if (!targetMath.feasible || targetMath.minimumSpeedMps > 28) return null;
+  if (!targetMath.feasible) return null;
 
   const lanes = activeLanes(gateMask);
   const requestedInitialTarget = candidate.maneuverPlan[0]?.targetLane;
@@ -1156,7 +1179,7 @@ function certifyGate(
       index += 1;
       if (runEnd - runStart < requiredTickSpan) continue;
 
-      // Advertise exactly the human-tolerant minimum span. The surrounding
+      // Advertise the guaranteed minimum span. The surrounding
       // analytic window remains useful for placement, but proving extra input
       // ticks would add synchronous work to the reveal frame without improving
       // the contract.
@@ -1263,7 +1286,16 @@ function certifyGate(
           false,
           'fixed-lane',
         );
+        const heldJumpReplay = simulateGateWitness(
+          revealWorld,
+          candidate,
+          targetLane,
+          jumpTick,
+          false,
+          'hold-jump',
+        );
         if (
+          heldJumpReplay.success ||
           noJumpReplay.success ||
           fixedLaneReplay.success ||
           noJumpReplay.crashedGateBlockerId === null ||
@@ -1517,7 +1549,7 @@ function prepareGateReplayWorlds(
     const outcome = stepWorld(world, input);
     if (
       localTick < traceUntilTick &&
-      localTick % LANE_COMMAND_INTERVAL_TICKS === 0
+      (localTick % LANE_COMMAND_INTERVAL_TICKS === 0 || input.laneDelta !== 0)
     ) {
       prefixWitness.push({
         tick: inputTick,
@@ -1567,14 +1599,25 @@ function continueGateWitness(
     // it freezes only once the new mixed sequence becomes the next threat.
     const desiredLane =
       control === 'fixed-lane' && !continuingApproach ? targetLane : routedLane;
-    const input = witnessInput(
+    const steeringInput = witnessInput(
       world.player,
       desiredLane,
       localTick,
-      control === 'no-jump' ? null : jumpTick,
-      control !== 'no-jump' && candidate.maneuverPlan.length > 1,
+      null,
+      false,
       continuingApproach,
     );
+    const jumpPressed =
+      control !== 'no-jump' &&
+      (control === 'hold-jump'
+        ? localTick >= jumpTick
+        : gateJumpPressedAt(
+            candidate.maneuverPlan,
+            candidate.blockerSpeedMps,
+            localTick,
+            jumpTick,
+          ));
+    const input: InputFrame = { ...steeringInput, jumpPressed };
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
     for (const blocker of blockers) {
@@ -1588,7 +1631,9 @@ function continueGateWitness(
     }
     if (
       recordTrace &&
-      (localTick % LANE_COMMAND_INTERVAL_TICKS === 0 || localTick === jumpTick)
+      (localTick % LANE_COMMAND_INTERVAL_TICKS === 0 ||
+        input.jumpPressed ||
+        input.laneDelta !== 0)
     ) {
       witness.push({
         tick: inputTick,
@@ -1753,7 +1798,13 @@ function simulateGroundWitness(
       (followingGate ||
         localTick >= 45 ||
         nearest?.encounterId !== newEncounterId) &&
-      localTick % LANE_COMMAND_INTERVAL_TICKS === 0 &&
+      // Preserve the gate's original input phase when proving a later row;
+      // reanchoring to this draft would delay already-timed steering commands.
+      (!followingGate ||
+        activeCertificate === null ||
+        (world.tickNumber - activeCertificate.revealTick) %
+          LANE_COMMAND_INTERVAL_TICKS ===
+          0) &&
       world.player.lane !== desiredLane &&
       world.player.queuedLane !== desiredLane
     ) {
@@ -1765,17 +1816,25 @@ function simulateGroundWitness(
       jumpPressed:
         followingGate &&
         activeCertificate !== null &&
-        world.tickNumber >=
+        gateJumpPressedAt(
+          activeCertificate.maneuverPlan,
+          activeCertificate.blockerTrajectories[0].speedMps,
+          world.tickNumber,
           Math.floor(
             (activeCertificate.safeTakeoffTickMin +
               activeCertificate.safeTakeoffTickMax) /
               2,
           ),
+        ),
     };
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input, boosts);
     if (boosts?.rocket && !world.player.airborne) boosts.rocket = null;
-    if (localTick % LANE_COMMAND_INTERVAL_TICKS === 0 || laneDelta !== 0) {
+    if (
+      localTick % LANE_COMMAND_INTERVAL_TICKS === 0 ||
+      laneDelta !== 0 ||
+      input.jumpPressed
+    ) {
       witness.push({
         tick: inputTick,
         lane: world.player.lane,
@@ -2014,8 +2073,12 @@ export class AutorooSimulation {
       bonusScore: 0,
     };
     this.pendingGateZM =
-      nudgeGateToSteadyRoad(this.seed, firstGateDistance(this.seed)) ??
-      Number.POSITIVE_INFINITY;
+      nudgeGateToSteadyRoad(
+        this.seed,
+        firstGateDistance(this.seed),
+        360,
+        GATE_SEQUENCE_FORWARD_M,
+      ) ?? Number.POSITIVE_INFINITY;
     this.fillAhead();
     this.fillBoosters();
   }
@@ -2080,8 +2143,12 @@ export class AutorooSimulation {
     this.gateIndex = 0;
     this.lastGateZM = 0;
     this.pendingGateZM =
-      nudgeGateToSteadyRoad(this.seed, firstGateDistance(this.seed)) ??
-      Number.POSITIVE_INFINITY;
+      nudgeGateToSteadyRoad(
+        this.seed,
+        firstGateDistance(this.seed),
+        360,
+        GATE_SEQUENCE_FORWARD_M,
+      ) ?? Number.POSITIVE_INFINITY;
     this.pendingGateAttempted = false;
     this.gateDraftStage = 0;
     this.forceCurrentEscapeNextEncounter = false;
@@ -2229,7 +2296,7 @@ export class AutorooSimulation {
       // Do not distract the player during a mandatory certified jump chain.
       if (
         pickup.absoluteZM > this.pendingGateZM - 50 &&
-        pickup.absoluteZM < this.pendingGateZM + GATE_FORWARD_STEADY_M + 40
+        pickup.absoluteZM < this.pendingGateZM + GATE_SEQUENCE_FORWARD_M + 40
       )
         continue;
       this.pickups.push(pickup);
@@ -2485,9 +2552,14 @@ export class AutorooSimulation {
         this.gateIndex,
         previousPlacedM,
       );
-      const minimumM = previousPlacedM + 500;
-      const placedM = nudgeGateToSteadyRoad(this.seed, requestedM, minimumM);
-      if (placedM === null || placedM < previousPlacedM + 500) continue;
+      const minimumM = previousPlacedM + GATE_MIN_SPACING_M;
+      const placedM = nudgeGateToSteadyRoad(
+        this.seed,
+        requestedM,
+        minimumM,
+        GATE_SEQUENCE_FORWARD_M,
+      );
+      if (placedM === null || placedM < minimumM) continue;
       this.pendingGateZM = placedM;
       this.pendingGateAttempted = false;
       this.gateDraftStage = 0;
@@ -2543,10 +2615,26 @@ export class AutorooSimulation {
     // front of every live row; align to the moving frontier before appending.
     this.preserveLiveEncounterOrder();
     const generationEndM = this.player.absoluteZM + TRAFFIC_PREGEN_AHEAD_M;
+    // Reserve space at encounter time, not just at spawn time. Approach cars
+    // keep driving while the player closes on a stationary bus sequence.
+    // The last approach row clears before the ~15 m bus takeoff point.
+    // Road topology keeps its separate 50 m steady approach reservation.
+    const approachEndM = this.pendingGateZM - 28;
+    const accelerationDelayS =
+      (MAX_SPEED_MPS - this.player.speedMps) ** 2 /
+      (2 * ACCELERATION_MPS2 * MAX_SPEED_MPS);
+    const approachArrivalS = Math.max(
+      0,
+      (approachEndM - this.player.absoluteZM) / MAX_SPEED_MPS +
+        accelerationDelayS,
+    );
     let remainingFailedDrafts = 4;
     while (this.encounterCursorM < generationEndM) {
       if (
-        this.encounterCursorM >= this.pendingGateZM - GATE_APPROACH_CLEAR_M &&
+        this.encounterCursorM +
+          ordinarySpeedMps(difficultyAt(this.encounterCursorM)) *
+            approachArrivalS >=
+          approachEndM &&
         this.encounterCursorM < this.pendingGateZM + POST_GATE_TRAFFIC_START_M
       ) {
         this.encounterCursorM = this.pendingGateZM + POST_GATE_TRAFFIC_START_M;
@@ -2678,9 +2766,17 @@ export class AutorooSimulation {
           : 0;
       const gateBlockerReserve = activeGateBlockers + pendingGateReserve;
       const gateNeedsPool = gateBlockerReserve > 0;
-      const frontCarLimit = pendingGateReserve
-        ? RENDER_POOL_LIMITS.frontCars - pendingGateReserve
-        : RENDER_POOL_LIMITS.frontCars;
+      const frontCarLimit = RENDER_POOL_LIMITS.frontCars;
+      // Ordinary buses must leave room for the next full-width challenge even
+      // while a smaller gate is active. Existing visible traffic is never culled
+      // to make the next certificate fit its render pool.
+      const liveGateBuses = this.traffic.filter(
+        (vehicle) => vehicle.role === 'gate' && vehicle.kind === 'bus',
+      ).length;
+      const busLimit = Math.min(
+        RENDER_POOL_LIMITS.buses,
+        liveGateBuses + RENDER_POOL_LIMITS.buses - MAX_PENDING_GATE_BLOCKERS,
+      );
       const ordinaryBlockerLimit = gateNeedsPool
         ? RENDER_POOL_LIMITS.frontCars +
           RENDER_POOL_LIMITS.buses -
@@ -2700,7 +2796,7 @@ export class AutorooSimulation {
               ? 'sedan'
               : 'suv';
         let kind = preferredKind;
-        if (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) {
+        if (kind === 'bus' && currentBuses >= busLimit) {
           if (currentCars >= frontCarLimit) continue;
           kind =
             hashParts(this.seed, this.encounterIndex, index, 353) % 2 === 0
@@ -2710,7 +2806,7 @@ export class AutorooSimulation {
           kind = 'bus';
         }
         if (
-          (kind === 'bus' && currentBuses >= RENDER_POOL_LIMITS.buses) ||
+          (kind === 'bus' && currentBuses >= busLimit) ||
           (kind !== 'bus' && currentCars >= frontCarLimit)
         )
           continue;
@@ -2726,7 +2822,7 @@ export class AutorooSimulation {
             'ordinary',
             candidates[index],
             zM,
-            activeCertificate ? 6 : 8,
+            activeCertificate ? 0 : ordinarySpeedMps(difficulty),
             certificateId,
             Number.isFinite(laneClosureM)
               ? laneClosureM -
@@ -2854,12 +2950,8 @@ export class AutorooSimulation {
     }
     const draftStage = this.gateDraftStage;
     const gateDifficulty = difficultyAt(this.player.maxForwardM);
-    const preferSuv =
-      gateDifficulty > 0.45 &&
-      hashParts(this.seed, this.gateIndex, 401) % 3 === 0;
-    const requestedRows = 20;
+    const requestedRows = gateDifficulty >= 0.8 ? 7 : 5;
     const gateMask = laneMaskAt(this.seed, this.pendingGateZM);
-    const startingLane = nearestActiveLane(gateMask, this.player.lane);
     const liveOrdinaryEncounterIds = new Set(
       this.traffic
         .filter((vehicle) => vehicle.role === 'ordinary')
@@ -2876,44 +2968,33 @@ export class AutorooSimulation {
         encounterId: route.encounterId,
         targetLane: route.certificate.targetLane,
       }));
-    const currentFrontCars = this.traffic.filter(
-      (vehicle) => vehicle.kind !== 'bus',
+    const startingLane = nearestActiveLane(
+      gateMask,
+      approachRoutes.at(-1)?.targetLane ?? this.player.lane,
+    );
+    const currentBuses = this.traffic.filter(
+      (vehicle) => vehicle.kind === 'bus',
     ).length;
-    // Every attempt is a sustained mixed chain. A failed proof degrades to a
-    // dense ordinary row; it never silently substitutes the old one-row gate.
-    const attempts: readonly [VehicleKind, number, number, number, number][] =
-      preferSuv
-        ? [
-            ['suv', 0, 28, requestedRows, 8],
-            ['sedan', 0, 28, requestedRows, 8],
-            ['suv', 0, 27, requestedRows, 8],
-            ['sedan', 0, 27, requestedRows, 8],
-          ]
-        : [
-            ['sedan', 0, 28, requestedRows, 8],
-            ['suv', 0, 28, requestedRows, 8],
-            ['sedan', 0, 27, requestedRows, 8],
-            ['suv', 0, 27, requestedRows, 8],
-          ];
+    // Try deterministic lane directions without weakening the obstacle or
+    // turning a failed mixed proof into a permissive jump-only challenge.
+    const attemptCount = 4;
     let certificate: ChallengeCertificate | null = null;
-    for (let attempt = 0; attempt < attempts.length; attempt += 1) {
-      const candidateAttempt = draftStage * attempts.length + attempt;
-      const [kind, blockerSpeed, targetSpeed, rowCount, jumpStride] =
-        attempts[attempt];
+    for (let attempt = 0; attempt < attemptCount; attempt += 1) {
+      const candidateAttempt = draftStage * attemptCount + attempt;
       const maneuverPlan = mixedPressureManeuvers(
         this.seed,
-        this.gateIndex * GATE_DRAFT_STAGES * attempts.length + candidateAttempt,
+        this.gateIndex * GATE_DRAFT_STAGES * attemptCount + candidateAttempt,
         gateMask,
         startingLane,
-        rowCount,
-        blockerSpeed,
-        jumpStride,
+        requestedRows,
+        0,
+        gateDifficulty,
       );
       const blockerCount = maneuverPlan.reduce(
         (total, maneuver) => total + countLanes(maneuver.blockedLaneMask),
         0,
       );
-      if (currentFrontCars + blockerCount > RENDER_POOL_LIMITS.frontCars) {
+      if (currentBuses + blockerCount > RENDER_POOL_LIMITS.buses) {
         continue;
       }
       certificate = certifyGate(
@@ -2923,9 +3004,9 @@ export class AutorooSimulation {
         this.traffic,
         this.bonusScore,
         this.pendingGateZM,
-        kind,
-        blockerSpeed,
-        targetSpeed,
+        'bus',
+        0,
+        MAX_SPEED_MPS,
         candidateAttempt,
         undefined,
         maneuverPlan,
@@ -2951,9 +3032,18 @@ export class AutorooSimulation {
         priorManeuver.targetLane < certificate.targetLane ? 1 : -1;
     }
     this.forceCurrentEscapeNextEncounter = true;
+    // The pending reservation is conservative. Once locked, start the jam
+    // immediately after this specific sequence's final grounded landing.
     this.encounterCursorM = Math.max(
-      this.encounterCursorM,
-      this.pendingGateZM + POST_GATE_TRAFFIC_START_M,
+      this.furthestLiveOrdinaryZM() +
+        ordinaryGapM(this.seed, this.encounterIndex, gateDifficulty),
+      this.pendingGateZM +
+        gateForwardReservationM(
+          certificate.selectedVehicle,
+          certificate.blockerTrajectories[0].speedMps,
+          certificate.maneuverPlan,
+        ) +
+        4,
     );
     for (const trajectory of certificate.blockerTrajectories) {
       this.traffic.push(

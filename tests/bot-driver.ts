@@ -11,7 +11,7 @@ import {
   PLAYER_LENGTH_M,
   VEHICLE_DIMENSIONS,
 } from '../app/game/constants';
-import { AutorooSimulation } from '../app/game/simulation';
+import { AutorooSimulation, gateJumpPressedAt } from '../app/game/simulation';
 
 interface ManeuverPlanRow {
   readonly offsetM: number;
@@ -117,13 +117,14 @@ export function certificateBotInput(
     const localTick = snapshot.tick - jump.revealTick;
     const plannedTarget = currentPlannedTarget(jump, snapshot);
     const groundTarget = targetGroundRoute(simulation, snapshot);
-    const targetLane =
-      groundTarget && groundTarget.nearestZM < plannedTarget.rowZM
-        ? groundTarget.certificate.targetLane
-        : plannedTarget.lane;
+    const followingGround =
+      groundTarget !== null && groundTarget.nearestZM < plannedTarget.rowZM;
+    const targetLane = followingGround
+      ? groundTarget.certificate.targetLane
+      : plannedTarget.lane;
     let laneDelta: -1 | 0 | 1 = 0;
     if (
-      localTick % LANE_COMMAND_INTERVAL_TICKS === 0 &&
+      (followingGround || localTick % LANE_COMMAND_INTERVAL_TICKS === 0) &&
       snapshot.player.lane !== targetLane &&
       snapshot.player.queuedLane !== targetLane
     ) {
@@ -132,11 +133,12 @@ export function certificateBotInput(
     }
     return {
       laneDelta,
-      // Mirrors a player holding Space: the production simulation ignores the
-      // input in the air and immediately takes off again after each landing.
-      jumpPressed:
-        snapshot.tick >=
+      jumpPressed: gateJumpPressedAt(
+        jump.maneuverPlan,
+        jump.blockerTrajectories[0].speedMps,
+        snapshot.tick,
         Math.floor((jump.safeTakeoffTickMin + jump.safeTakeoffTickMax) / 2),
+      ),
     };
   }
 

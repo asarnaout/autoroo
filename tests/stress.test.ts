@@ -1,65 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import { FIXED_DT, TRAFFIC_RENDER_AHEAD_M } from '../app/game/constants';
-import type { ChallengeCertificate, LaneIndex } from '../app/game/contracts';
-import { roadModuleAt } from '../app/game/generator';
+import {
+  FIXED_DT,
+  RENDER_POOL_LIMITS,
+  TRAFFIC_RENDER_AHEAD_M,
+} from '../app/game/constants';
+import type { ChallengeCertificate } from '../app/game/contracts';
+import { laneMaskAt, roadModuleAt } from '../app/game/generator';
 import { AutorooSimulation } from '../app/game/simulation';
 import { certificateBotInput } from './bot-driver';
 
 const stress = process.env.AUTOROO_STRESS === '1';
 
-interface ManeuverPlanRow {
-  readonly offsetM: number;
-  readonly blockedLaneMask: number;
-  readonly action: 'jump' | 'dodge';
-  readonly targetLane: LaneIndex;
+function percentile(values: readonly number[], fraction: number): number {
+  const ordered = [...values].sort((first, second) => first - second);
+  return ordered[Math.floor((ordered.length - 1) * fraction)] ?? 0;
 }
 
-function maneuverPlan(
+function assertDemandingChallenge(
+  seed: number,
   certificate: ChallengeCertificate,
-): readonly ManeuverPlanRow[] {
-  return (
-    (
-      certificate as ChallengeCertificate & {
-        readonly maneuverPlan?: readonly ManeuverPlanRow[];
-      }
-    ).maneuverPlan ?? []
+): void {
+  const plan = certificate.maneuverPlan;
+  const firstStartM = Math.min(
+    ...certificate.blockerTrajectories.map((trajectory) => trajectory.startZM),
   );
-}
-
-function isLongMixedChallenge(certificate: ChallengeCertificate): boolean {
-  const plan = [...maneuverPlan(certificate)].sort(
-    (first, second) => first.offsetM - second.offsetM,
-  );
-  if (plan.length < 2) return false;
-  const jumps = plan.filter((row) => row.action === 'jump').length;
-  const dodges = plan.filter((row) => row.action === 'dodge');
-  const targets = dodges.map((row) => row.targetLane);
-  const gaps = plan
-    .slice(1)
-    .map((row, index) => row.offsetM - plan[index].offsetM);
-  const actionChanges = plan
-    .slice(1)
-    .filter((row, index) => row.action !== plan[index].action).length;
-  const targetChanges = targets
-    .slice(1)
-    .filter((lane, index) => lane !== targets[index]).length;
-  return (
-    plan.length >= 20 &&
-    jumps >= 3 &&
-    dodges.length >= 17 &&
-    plan.at(-1)!.offsetM - plan[0].offsetM >= 285 &&
-    Math.max(...gaps) <= 18 &&
-    actionChanges >= 3 &&
-    new Set(targets).size >= 2 &&
-    targetChanges >= 2 &&
-    certificate.witness.some((point) => point.input.jumpPressed) &&
-    certificate.witness.some((point) => point.input.laneDelta !== 0)
-  );
-}
-
-function isMixedChallenge(certificate: ChallengeCertificate): boolean {
-  const actions = new Set(maneuverPlan(certificate).map((row) => row.action));
-  return actions.has('jump') && actions.has('dodge');
+  expect([5, 7], certificate.id).toContain(plan.length);
+  expect(certificate.selectedVehicle, certificate.id).toBe('bus');
+  expect(
+    plan.filter((row) => row.action === 'jump').length,
+    certificate.id,
+  ).toBeGreaterThanOrEqual(3);
+  expect(
+    plan.filter((row) => row.action === 'dodge').length,
+    certificate.id,
+  ).toBeGreaterThanOrEqual(2);
+  for (const [index, row] of plan.entries()) {
+    const activeMask = laneMaskAt(seed, firstStartM + row.offsetM);
+    if (row.action === 'jump') {
+      expect(row.blockedLaneMask, certificate.id).toBe(activeMask);
+    } else {
+      expect(activeMask & ~row.blockedLaneMask, certificate.id).toBe(
+        1 << row.targetLane,
+      );
+      expect(
+        Math.abs(row.targetLane - plan[index - 1].targetLane),
+        certificate.id,
+      ).toBe(1);
+    }
+  }
 }
 
 describe.runIf(stress)('long-run procedural stress', () => {
@@ -76,7 +64,7 @@ describe.runIf(stress)('long-run procedural stress', () => {
     expect(checksum).not.toBe(0);
   }, 60_000);
 
-  it('drives the production simulation for 100 km per seed with bounded retained state', () => {
+  it('maintains dense, demanding, solvable traffic for 100 km per seed with bounded retained state', () => {
     for (const seed of [7, 71, 701]) {
       const simulation = new AutorooSimulation(seed);
       simulation.start();
@@ -85,11 +73,15 @@ describe.runIf(stress)('long-run procedural stress', () => {
       const clearedGates = new Set<string>();
       const seenCertificates = new Set<string>();
       const lateRowKeys = new Set<string>();
-      const mixedChallengeStartsM: number[] = [];
+      const gateStartsM: number[] = [];
+      const liveRowGapsM: number[] = [];
+      const actionIntervalsS: number[] = [];
       const seenTrafficIds = new Set(
         simulation.snapshot().traffic.map((vehicle) => vehicle.id),
       );
       let activeGateId: string | null = null;
+      let previousGroundLane = simulation.snapshot().player.lane;
+      let previousGroundZM = Number.NEGATIVE_INFINITY;
       let maxFrontCars = 0;
       let maxBuses = 0;
       let maxGroundCertificates = 0;
@@ -99,10 +91,15 @@ describe.runIf(stress)('long-run procedural stress', () => {
       let maxEmptyViewTicks = 0;
       let lateEmptyViewTicks = 0;
       let lateTicks = 0;
-      let maneuverLullTicks = 0;
-      let maxManeuverLullTicks = 0;
+      let actionLullTicks = 0;
+      let maxActionLullTicks = 0;
+      let lastActionTick: number | null = null;
+      let committedSteers = 0;
+      let jumpStarts = 0;
+      let visibleSum = 0;
+      let nearSum = 0;
+      let visibilitySamples = 0;
       let steps = 0;
-
       while (simulation.renderPlayer.absoluteZM < 100_000 && steps < 260_000) {
         const snapshot = simulation.snapshot();
         laneCounts.add(snapshot.laneCount);
@@ -117,87 +114,105 @@ describe.runIf(stress)('long-run procedural stress', () => {
           if (vehicle.role === 'ordinary')
             ordinaryEncounters.add(vehicle.encounterId);
         }
-        const certificates = [
-          ...simulation.getGroundCertificates(),
-          ...(snapshot.activeCertificate ? [snapshot.activeCertificate] : []),
-        ];
-        for (const certificate of certificates) {
+        for (const certificate of simulation.getGroundCertificates()) {
           if (seenCertificates.has(certificate.id)) continue;
           seenCertificates.add(certificate.id);
-          for (const startM of new Set(
-            certificate.blockerTrajectories.map(
-              (trajectory) => Math.round(trajectory.startZM * 1000) / 1000,
-            ),
-          )) {
-            if (startM >= 2000) lateRowKeys.add(`${certificate.id}:${startM}`);
+          const startM = certificate.blockerTrajectories[0].startZM;
+          if (startM - previousGroundZM < 150) {
+            expect(
+              Math.abs(certificate.targetLane - previousGroundLane),
+              `${seed}:${certificate.id}: ${previousGroundLane} to ${certificate.targetLane}`,
+            ).toBeLessThanOrEqual(1);
           }
-          if (isLongMixedChallenge(certificate)) {
-            const startM = Math.min(
-              ...certificate.blockerTrajectories.map(
+          previousGroundLane = certificate.targetLane;
+          previousGroundZM = startM;
+          if (startM >= 2000 && startM < 100_000)
+            lateRowKeys.add(certificate.id);
+        }
+        const gate = snapshot.activeCertificate;
+        if (gate) {
+          activeGateId = gate.id;
+          if (!seenCertificates.has(gate.id)) {
+            seenCertificates.add(gate.id);
+            assertDemandingChallenge(seed, gate);
+            const firstStartM = Math.min(
+              ...gate.blockerTrajectories.map(
                 (trajectory) => trajectory.startZM,
               ),
             );
-            if (startM >= 2000) mixedChallengeStartsM.push(startM);
+            if (firstStartM < 100_000) gateStartsM.push(firstStartM);
+            for (const row of gate.maneuverPlan) {
+              const startM = firstStartM + row.offsetM;
+              if (startM >= 2000 && startM < 100_000)
+                lateRowKeys.add(`${gate.id}:${row.offsetM}`);
+            }
           }
-        }
-        if (snapshot.activeCertificate)
-          activeGateId = snapshot.activeCertificate.id;
-        else if (activeGateId) {
+        } else if (activeGateId) {
           clearedGates.add(activeGateId);
           activeGateId = null;
         }
 
-        const hasVisibleObstacle = snapshot.traffic.some(
+        const visible = snapshot.traffic.filter(
           (vehicle) =>
             vehicle.absoluteZM > snapshot.player.absoluteZM &&
             vehicle.absoluteZM <= snapshot.player.absoluteZM + 260,
         );
-        if (!hasVisibleObstacle) {
+        if (visible.length === 0) {
           emptyViewStartedM ??= snapshot.player.absoluteZM;
           if (snapshot.player.absoluteZM >= 500) emptyViewTicks += 1;
-        } else if (emptyViewStartedM !== null) {
-          maxEmptyViewM = Math.max(
-            maxEmptyViewM,
-            snapshot.player.absoluteZM - emptyViewStartedM,
-          );
-          emptyViewStartedM = null;
-          maxEmptyViewTicks = Math.max(maxEmptyViewTicks, emptyViewTicks);
-          emptyViewTicks = 0;
         } else {
-          maxEmptyViewTicks = Math.max(maxEmptyViewTicks, emptyViewTicks);
+          if (emptyViewStartedM !== null)
+            maxEmptyViewM = Math.max(
+              maxEmptyViewM,
+              snapshot.player.absoluteZM - emptyViewStartedM,
+            );
+          emptyViewStartedM = null;
           emptyViewTicks = 0;
         }
+        maxEmptyViewTicks = Math.max(maxEmptyViewTicks, emptyViewTicks);
         if (snapshot.player.absoluteZM >= 2000) {
           lateTicks += 1;
-          if (!hasVisibleObstacle) lateEmptyViewTicks += 1;
+          if (visible.length === 0) lateEmptyViewTicks += 1;
+          if (steps % 120 === 0) {
+            visibleSum += visible.length;
+            nearSum += visible.filter(
+              (vehicle) =>
+                vehicle.absoluteZM <= snapshot.player.absoluteZM + 80,
+            ).length;
+            visibilitySamples += 1;
+            const rowsM = [
+              ...new Set(
+                visible.map(
+                  (vehicle) => Math.round(vehicle.absoluteZM * 1000) / 1000,
+                ),
+              ),
+            ].sort((first, second) => first - second);
+            liveRowGapsM.push(
+              ...rowsM.slice(1).map((rowM, index) => rowM - rowsM[index]),
+            );
+          }
         }
-
         const input = certificateBotInput(simulation, snapshot);
-        const mixedChainActive =
-          snapshot.activeCertificate !== null &&
-          isMixedChallenge(snapshot.activeCertificate);
-        const immediateTrafficPressure = snapshot.traffic.some(
-          (vehicle) =>
-            vehicle.absoluteZM > snapshot.player.absoluteZM &&
-            vehicle.absoluteZM <= snapshot.player.absoluteZM + 230,
-        );
-        const wasAirborne = snapshot.player.airborne;
         simulation.tick(input);
         if (snapshot.player.absoluteZM >= 2000) {
-          const jumpStarted = !wasAirborne && simulation.renderPlayer.airborne;
-          if (
-            input.laneDelta !== 0 ||
-            jumpStarted ||
-            mixedChainActive ||
-            immediateTrafficPressure
-          ) {
-            maxManeuverLullTicks = Math.max(
-              maxManeuverLullTicks,
-              maneuverLullTicks,
-            );
-            maneuverLullTicks = 0;
+          const committedSteer =
+            simulation.renderPlayer.lane !== snapshot.player.lane;
+          const jumpStarted =
+            !snapshot.player.airborne && simulation.renderPlayer.airborne;
+          committedSteers += Number(committedSteer);
+          jumpStarts += Number(jumpStarted);
+          // Count actual changes to the player, not traffic visibility, active
+          // certificates, or rejected input. Otherwise long coasts pass as busy.
+          if (committedSteer || jumpStarted) {
+            if (lastActionTick !== null)
+              actionIntervalsS.push(
+                (snapshot.tick - lastActionTick) * FIXED_DT,
+              );
+            lastActionTick = snapshot.tick;
+            actionLullTicks = 0;
           } else {
-            maneuverLullTicks += 1;
+            actionLullTicks += 1;
+            maxActionLullTicks = Math.max(maxActionLullTicks, actionLullTicks);
           }
         }
         expect(
@@ -208,7 +223,7 @@ describe.runIf(stress)('long-run procedural stress', () => {
             zM: snapshot.player.absoluteZM,
             lane: snapshot.player.lane,
             input,
-            certificate: snapshot.activeCertificate?.id ?? null,
+            gate: gate?.id ?? null,
             nearby: snapshot.traffic
               .filter(
                 (vehicle) =>
@@ -223,7 +238,6 @@ describe.runIf(stress)('long-run procedural stress', () => {
               })),
           }),
         ).toBe('running');
-
         const counts = simulation.debugRetainedCounts();
         maxFrontCars = Math.max(maxFrontCars, counts.frontCars);
         maxBuses = Math.max(maxBuses, counts.buses);
@@ -231,57 +245,93 @@ describe.runIf(stress)('long-run procedural stress', () => {
           maxGroundCertificates,
           counts.groundCertificates,
         );
-        expect(counts.frontCars).toBeLessThanOrEqual(40);
-        expect(counts.buses).toBeLessThanOrEqual(16);
-        expect(counts.totalTraffic).toBeLessThanOrEqual(56);
+        expect(counts.frontCars).toBeLessThanOrEqual(
+          RENDER_POOL_LIMITS.frontCars,
+        );
+        expect(counts.buses).toBeLessThanOrEqual(RENDER_POOL_LIMITS.buses);
+        expect(counts.totalTraffic).toBeLessThanOrEqual(
+          RENDER_POOL_LIMITS.frontCars + RENDER_POOL_LIMITS.buses,
+        );
         expect(counts.activeCertificates).toBeLessThanOrEqual(1);
-        expect(counts.groundCertificates).toBeLessThanOrEqual(18);
-        expect(counts.witnessPoints).toBeLessThanOrEqual(2000);
+        expect(counts.groundCertificates).toBeLessThanOrEqual(26);
+        expect(counts.witnessPoints).toBeLessThanOrEqual(3000);
         expect(
           new Set(simulation.renderTraffic.map((vehicle) => vehicle.id)).size,
         ).toBe(simulation.renderTraffic.length);
         expect(simulation.drainEvents().length).toBeLessThanOrEqual(5);
         steps += 1;
       }
-
       const final = simulation.snapshot();
-      if (emptyViewStartedM !== null) {
+      if (emptyViewStartedM !== null)
         maxEmptyViewM = Math.max(
           maxEmptyViewM,
           final.player.absoluteZM - emptyViewStartedM,
         );
-      }
-      maxEmptyViewTicks = Math.max(maxEmptyViewTicks, emptyViewTicks);
-      maxManeuverLullTicks = Math.max(maxManeuverLullTicks, maneuverLullTicks);
       expect(final.player.absoluteZM).toBeGreaterThanOrEqual(100_000);
       expect(final.difficulty).toBeGreaterThan(0.999);
       expect(laneCounts).toEqual(new Set([2, 3, 4]));
-      // Exact moving-trajectory reservations and obstacle-free tapers still
-      // reject some candidates from the bounded 30–34 m late-game cadence.
-      // Both challenge kinds must nevertheless recur throughout the run.
-      expect(clearedGates.size).toBeGreaterThan(40);
-      expect(ordinaryEncounters.size).toBeGreaterThan(500);
+      expect(clearedGates.size, `seed ${seed}`).toBeGreaterThanOrEqual(100);
+      expect(ordinaryEncounters.size, `seed ${seed}`).toBeGreaterThanOrEqual(
+        2000,
+      );
       expect(steps).toBeLessThan(260_000);
       expect(maxFrontCars).toBeGreaterThan(0);
       expect(maxBuses).toBeGreaterThan(0);
       expect(maxGroundCertificates).toBeGreaterThan(0);
-      expect(maxEmptyViewTicks * FIXED_DT).toBeLessThanOrEqual(1.5);
-      expect(maxEmptyViewM).toBeLessThanOrEqual(55);
-      expect(lateEmptyViewTicks / lateTicks).toBeLessThanOrEqual(0.02);
-      expect(maxManeuverLullTicks * FIXED_DT).toBeLessThanOrEqual(3);
-      expect(lateRowKeys.size).toBeGreaterThanOrEqual(1600);
-      mixedChallengeStartsM.sort((first, second) => first - second);
-      expect(mixedChallengeStartsM.length).toBeGreaterThanOrEqual(60);
-      if (mixedChallengeStartsM.length > 0) {
-        const coverageGapsM = [
-          mixedChallengeStartsM[0] - 2000,
-          ...mixedChallengeStartsM
-            .slice(1)
-            .map((startM, index) => startM - mixedChallengeStartsM[index]),
-          100_000 - mixedChallengeStartsM.at(-1)!,
-        ];
-        expect(Math.max(...coverageGapsM)).toBeLessThanOrEqual(3500);
-      }
+      expect(maxEmptyViewTicks * FIXED_DT, `seed ${seed}`).toBeLessThanOrEqual(
+        1.5,
+      );
+      expect(maxEmptyViewM, `seed ${seed}`).toBeLessThanOrEqual(55);
+      expect(
+        lateEmptyViewTicks / lateTicks,
+        `seed ${seed}`,
+      ).toBeLessThanOrEqual(0.02);
+      expect(
+        maxActionLullTicks * FIXED_DT,
+        `seed ${seed} actual action lull`,
+      ).toBeLessThanOrEqual(3.5);
+      expect(
+        percentile(actionIntervalsS, 0.9),
+        `seed ${seed} actual action intervals`,
+      ).toBeLessThanOrEqual(0.8);
+      expect(
+        committedSteers / 98,
+        `seed ${seed} steering per km`,
+      ).toBeGreaterThanOrEqual(35);
+      expect(
+        (committedSteers + jumpStarts) / 98,
+        `seed ${seed} actions per km`,
+      ).toBeGreaterThanOrEqual(45);
+      expect(
+        visibleSum / visibilitySamples,
+        `seed ${seed} visible traffic`,
+      ).toBeGreaterThanOrEqual(24);
+      expect(
+        nearSum / visibilitySamples,
+        `seed ${seed} close traffic`,
+      ).toBeGreaterThanOrEqual(7);
+      expect(
+        percentile(liveRowGapsM, 0.9),
+        `seed ${seed} physical row gaps`,
+      ).toBeLessThanOrEqual(22);
+      expect(lateRowKeys.size, `seed ${seed}`).toBeGreaterThanOrEqual(3200);
+      gateStartsM.sort((first, second) => first - second);
+      expect(
+        gateStartsM[0],
+        `seed ${seed} first mandatory jump`,
+      ).toBeLessThanOrEqual(600);
+      expect(gateStartsM.length, `seed ${seed}`).toBeGreaterThanOrEqual(100);
+      const coverageGapsM = [
+        gateStartsM[0],
+        ...gateStartsM
+          .slice(1)
+          .map((startM, index) => startM - gateStartsM[index]),
+        100_000 - gateStartsM.at(-1)!,
+      ];
+      expect(
+        Math.max(...coverageGapsM),
+        `seed ${seed} challenge coverage`,
+      ).toBeLessThanOrEqual(1100);
     }
   }, 120_000);
 });

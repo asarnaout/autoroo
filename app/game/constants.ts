@@ -10,8 +10,8 @@ export const MODULE_LENGTH_M = 100;
 export const ROAD_TILE_LENGTH_M = 40;
 export const ROAD_SIDEWALK_WIDTH_M = 1.15;
 export const RENDER_POOL_LIMITS = Object.freeze({
-  frontCars: 40,
-  buses: 16,
+  frontCars: 56,
+  buses: 32,
   roadTiles: 16,
 });
 
@@ -41,14 +41,16 @@ export const PLAYER_LENGTH_M = 3.6;
 export const LONGITUDINAL_MARGIN_M = 0.25;
 export const VERTICAL_CLEARANCE_M = 0.15;
 export const TIMING_MARGIN_TICKS = 2;
-export const MIN_SPACE_WINDOW_S = 0.25;
-// Pressure sequences reserve a quiet approach/landing corridor. Their exact
-// reveal-state replay preserves reaction, acceleration, and input windows.
-export const GATE_APPROACH_CLEAR_M = 140;
+export const MIN_SPACE_WINDOW_S = 0.1;
+// Compact challenges leave only a short approach; existing traffic is replayed
+// as part of certification instead of clearing a long stretch of road.
+export const GATE_APPROACH_CLEAR_M = 50;
+export const GATE_SEQUENCE_FORWARD_M = 132;
+export const GATE_MIN_SPACING_M = 470;
 export const GATE_LANDING_CLEAR_M = 8;
 export const GATE_WITNESS_LIMIT_S = 20;
-// Twenty alternating jump/landing beats span roughly 291 m. This bound also
-// includes the final blocker footprint and the compact landing corridor.
+// Upper bound for the generic certification API, including moving blockers.
+// Production sequences use the smaller GATE_SEQUENCE_FORWARD_M reservation.
 export const GATE_FORWARD_STEADY_M = 310;
 
 export const VEHICLE_DIMENSIONS: Readonly<

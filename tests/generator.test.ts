@@ -3,6 +3,8 @@ import {
   FOUR_LANES,
   GATE_APPROACH_CLEAR_M,
   GATE_FORWARD_STEADY_M,
+  GATE_SEQUENCE_FORWARD_M,
+  GATE_MIN_SPACING_M,
   LANE_X,
   THREE_LEFT,
   THREE_RIGHT,
@@ -323,7 +325,7 @@ describe('procedural road topology', () => {
     expect(difficultyAt(20_000)).toBeLessThanOrEqual(1);
   });
 
-  it('contracts ordinary rows from roughly 46 m to a 26–30 m dense core', () => {
+  it('contracts ordinary rows from roughly 34 m to a 15–17 m dense core', () => {
     const early: number[] = [];
     const late: number[] = [];
     for (let seed = 0; seed < 1000; seed += 1) {
@@ -332,12 +334,12 @@ describe('procedural road topology', () => {
     }
     const mean = (values: number[]) =>
       values.reduce((sum, value) => sum + value, 0) / values.length;
-    expect(mean(early)).toBeCloseTo(46, 0);
-    expect(mean(late)).toBeCloseTo(28, 0);
-    expect(Math.min(...early)).toBeGreaterThanOrEqual(44);
-    expect(Math.max(...early)).toBeLessThanOrEqual(48);
-    expect(Math.min(...late)).toBeGreaterThanOrEqual(26);
-    expect(Math.max(...late)).toBeLessThanOrEqual(30);
+    expect(mean(early)).toBeCloseTo(34, 0);
+    expect(mean(late)).toBeCloseTo(16, 0);
+    expect(Math.min(...early)).toBeGreaterThanOrEqual(33);
+    expect(Math.max(...early)).toBeLessThanOrEqual(35);
+    expect(Math.min(...late)).toBeGreaterThanOrEqual(15);
+    expect(Math.max(...late)).toBeLessThanOrEqual(17);
   });
 
   it('moves each scheduled gate into a transition-free reservation', () => {
@@ -367,18 +369,28 @@ describe('procedural road topology', () => {
     const earlyPlaced: number[] = [];
     const latePlaced: number[] = [];
     for (let seed = 0; seed < 200; seed += 1) {
-      let previous = nudgeGateToSteadyRoad(seed, firstGateDistance(seed));
+      let previous = nudgeGateToSteadyRoad(
+        seed,
+        firstGateDistance(seed),
+        360,
+        GATE_SEQUENCE_FORWARD_M,
+      );
       expect(previous).not.toBeNull();
       if (previous === null) throw new Error('Expected an initial gate');
       for (let gateIndex = 1; gateIndex <= 200; gateIndex += 1) {
         const requested = nextGateDistance(seed, gateIndex, previous);
         if (gateIndex <= 10) earlyRequested.push(requested - previous);
         if (gateIndex > 190) lateRequested.push(requested - previous);
-        const placed = nudgeGateToSteadyRoad(seed, requested, previous + 500);
+        const placed = nudgeGateToSteadyRoad(
+          seed,
+          requested,
+          previous + GATE_MIN_SPACING_M,
+          GATE_SEQUENCE_FORWARD_M,
+        );
         expect(placed).not.toBeNull();
         if (placed === null) throw new Error('Expected a sequential gate');
         const gap = placed - previous;
-        expect(gap).toBeGreaterThanOrEqual(500);
+        expect(gap).toBeGreaterThanOrEqual(GATE_MIN_SPACING_M);
         if (gateIndex <= 5) earlyPlaced.push(gap);
         if (gateIndex > 180) latePlaced.push(gap);
         previous = placed;
@@ -387,7 +399,7 @@ describe('procedural road topology', () => {
     const mean = (values: number[]) =>
       values.reduce((sum, value) => sum + value, 0) / values.length;
     expect(mean(lateRequested)).toBeLessThan(mean(earlyRequested));
-    expect(mean(latePlaced)).toBeLessThan(1200);
+    expect(mean(latePlaced)).toBeLessThan(750);
     expect(mean(latePlaced)).toBeLessThanOrEqual(mean(earlyPlaced) + 100);
   }, 30_000);
 });

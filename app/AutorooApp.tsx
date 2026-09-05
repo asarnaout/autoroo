@@ -278,7 +278,7 @@ export function AutorooApp() {
       name: 'start_autoroo_run',
       title: 'Start Autoroo run',
       description:
-        'Start the ready Autoroo run, equivalent to the visible Let’s drive button.',
+        'Start the ready Autoroo run, equivalent to the visible GO! button.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -522,7 +522,7 @@ export function AutorooApp() {
                 <Play fill="currentColor" aria-hidden="true" />
                 <span aria-live="polite">
                   {sceneReady
-                    ? 'Let’s drive'
+                    ? 'GO!'
                     : `Loading city ${Math.round(loadProgress * 100)}%`}
                 </span>
               </Button>

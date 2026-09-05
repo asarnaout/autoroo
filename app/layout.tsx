@@ -3,7 +3,9 @@ import './globals.css';
 import './menu.css';
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://autoroo.netlify.app'),
+  metadataBase: new URL(
+    'https://autoroo-googly-getaway.asarnaout.chatgpt.site',
+  ),
   title: 'Autoroo',
   description:
     'An endless, very jumpy driving game. Dodge traffic, clear buses, and keep the road going.',

@@ -115,11 +115,13 @@ there are no imported booster models, textures, or sound samples. Tuning and
 station generation live in `app/game/boosters.ts`. Booster timers and animation
 state follow simulation time and freeze when paused.
 
-## Netlify
+## ChatGPT Sites
 
-`netlify.toml` targets Node 22, runs `npm run build:static`, and publishes
-`dist/client`. This is a static export with no account system, server function,
-Netlify Next.js plugin, or runtime backend. Hashed models receive immutable cache
-headers. Deployment itself is intentionally outside this repository task.
+The game is hosted at <https://autoroo-googly-getaway.asarnaout.chatgpt.site>.
+Run `npm run build:static` to generate the static export in `dist/client`.
+`.openai/hosting.json` connects this checkout to the existing ChatGPT Site and
+selects that output for deployment. Publish through Sites after building and
+saving the matching source version. No server functions or runtime backend are
+required.
 
 See `CREDITS.md` for source, licence, modification, and exclusion records.

@@ -506,6 +506,8 @@ button {
 
 /* Thumb controls have their own clear space below the chase camera. */
 .touch-controls {
+  --touch-pad-height: 128px;
+  --touch-jump-width: clamp(104px, 30vw, 128px);
   margin: 0;
   border: 0;
   min-width: 0;
@@ -513,11 +515,12 @@ button {
   z-index: 15;
   inset: auto 0 0;
   height: calc(178px + env(safe-area-inset-bottom));
-  padding: 26px max(16px, env(safe-area-inset-right))
-    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: 8px max(16px, env(safe-area-inset-right))
+    max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  gap: 16px;
   background: linear-gradient(
     transparent,
     rgb(7 17 35 / 45%) 40%,
@@ -527,9 +530,44 @@ button {
   -webkit-touch-callout: none;
 }
 .touch-steering {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  position: relative;
   display: grid;
-  grid-template-columns: repeat(2, 64px);
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 0 1 256px;
+  min-width: 0;
+  height: var(--touch-pad-height);
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* The full rectangle receives input, including the divider and corners.
+   Only the artwork is rounded; neighbouring direction targets never overlap. */
+.touch-steering::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid #a4b6ce;
+  border-radius: 34px;
+  background: linear-gradient(160deg, #304766, #172840);
+  box-shadow:
+    0 6px 0 #071123,
+    inset 0 2px 0 rgb(255 255 255 / 16%);
+  pointer-events: none;
+}
+.touch-steering::after {
+  content: '';
+  position: absolute;
+  width: 2px;
+  top: 24px;
+  bottom: 24px;
+  left: calc(50% - 1px);
+  border-radius: 2px;
+  background: rgb(213 226 245 / 28%);
+  pointer-events: none;
 }
 .touch-button {
   display: flex;
@@ -558,13 +596,13 @@ button {
 }
 .touch-button span {
   order: 2;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 950;
   letter-spacing: 0.06em;
 }
 .touch-button small {
   order: 3;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 900;
 }
 .touch-button[data-pressed='true'] {
@@ -579,9 +617,53 @@ button {
   outline: 3px solid #fff5d6;
   outline-offset: 4px;
 }
+.touch-steering .touch-button {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  height: 100%;
+  gap: 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.touch-steering .touch-button::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 6px;
+  border-radius: 27px;
+  pointer-events: none;
+}
+.touch-steering .touch-button svg {
+  width: 42px;
+  height: 42px;
+  stroke-width: 2.5;
+}
+.touch-steering .touch-button[data-pressed='true'] {
+  transform: none;
+  background: transparent;
+  box-shadow: none;
+  color: #fff4ab;
+}
+.touch-steering .touch-button[data-pressed='true']::before {
+  background: #45638a;
+  box-shadow:
+    inset 0 0 0 2px #fff4ab,
+    0 0 18px rgb(255 235 145 / 34%);
+}
+.touch-steering .touch-button[data-pressed='true'] > * {
+  transform: translateY(3px);
+}
+.touch-steering .touch-button:focus-visible {
+  outline-offset: -7px;
+  border-radius: 32px;
+}
 .touch-jump {
-  width: 112px;
-  height: 112px;
+  flex: 0 0 var(--touch-jump-width);
+  width: var(--touch-jump-width);
+  height: var(--touch-pad-height);
   gap: 0;
   border: 3px solid #fff4ab;
   border-radius: 36px;
@@ -624,19 +706,10 @@ button {
 }
 @media (max-height: 500px) and (min-aspect-ratio: 1/1) {
   .touch-controls {
+    --touch-pad-height: 104px;
+    --touch-jump-width: 112px;
     height: calc(142px + env(safe-area-inset-bottom));
-    padding-top: 8px;
-  }
-  .touch-steering {
-    grid-template-columns: 60px 60px;
-    gap: 7px;
-  }
-  .touch-button {
-    min-height: 54px;
-  }
-  .touch-jump {
-    width: 100px;
-    height: 100px;
+    padding-bottom: max(20px, env(safe-area-inset-bottom));
   }
 }
 

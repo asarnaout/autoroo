@@ -571,22 +571,7 @@ export function AutorooApp() {
               </div>
             </div>
 
-            {touchDriving ? (
-              <div
-                className="start-controls start-touch-guide"
-                aria-label="Touch controls"
-              >
-                <span>
-                  <strong>AUTO-DRIVE</strong>We handle the gas.
-                </span>
-                <span>
-                  <strong>← STEER →</strong>Tap to flip lanes.
-                </span>
-                <span>
-                  <strong>JUMP</strong>Hold to keep hopping.
-                </span>
-              </div>
-            ) : (
+            {!touchDriving && (
               <div className="start-controls" aria-label="Keyboard controls">
                 <span className="start-control">
                   <span className="start-keys">

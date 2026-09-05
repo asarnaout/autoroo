@@ -398,13 +398,14 @@ export class BoosterVisuals {
       entry.halo.material = this.haloMaterials[pickup.kind];
       entry.halo.rotation.z = Math.sin(seconds * 2 + i) * 0.08;
     }
-    const protectedNow = state.shieldReady || state.protectionS > 0;
+    const shieldReady = state.shieldCount > 0;
+    const protectedNow = shieldReady || state.protectionS > 0;
     this.bubble.setEnabled(protectedNow);
     this.bubble.position.set(playerX, playerY + 0.9, 0);
-    this.bubble.visibility = state.shieldReady
+    this.bubble.visibility = shieldReady
       ? 1
       : 0.35 + 0.45 * Math.abs(Math.sin(seconds * 24));
-    this.bubbleEyes.setEnabled(state.shieldReady);
+    this.bubbleEyes.setEnabled(shieldReady);
     this.bubbleEyes.position.set(playerX, playerY + 1.35, -1.85);
     this.bubbleEyes.scaling.setAll(0.48);
     this.bubbleEyes.rotation.z = Math.sin(seconds * 5) * 0.09;

@@ -195,7 +195,7 @@ describe('collectible generation and collection', () => {
         run.__debugSetPlayer({ speedMps: BASE_SPEED_MPS });
         clearTick(run, tap);
         if (doubleJump) {
-          run.__debugSetBoosters({ doubleJumpReady: true });
+          run.__debugSetBoosters({ doubleJumpCount: 1 });
           clearTick(run, tap);
         }
         for (let i = 0; i < 24; i += 1) clearTick(run);
@@ -212,8 +212,8 @@ describe('collectible generation and collection', () => {
           run.renderPickups.some((candidate) => candidate.id === item.id),
         ).toBe(false);
         const boosts = run.renderBoosters;
-        if (kind === 'boing') expect(boosts.doubleJumpReady).toBe(true);
-        if (kind === 'shield') expect(boosts.shieldReady).toBe(true);
+        if (kind === 'boing') expect(boosts.doubleJumpCount).toBe(1);
+        if (kind === 'shield') expect(boosts.shieldCount).toBe(1);
         if (kind === 'rocket') expect(boosts.rocket).not.toBeNull();
         clearTick(run);
         expect(
@@ -225,33 +225,60 @@ describe('collectible generation and collection', () => {
     },
   );
 
-  it('collects once, caps inventory at one, and restart clears every ability', () => {
+  it('stacks each pickup once, preserves snapshots and pause state, and clears inventory on restart', () => {
     const run = emptyRun();
-    run.__debugReplacePickups([pickup('boing'), pickup('shield')]);
-    run.tick(EMPTY_INPUT);
-    expect(run.snapshot().boosters).toMatchObject({
-      doubleJumpReady: true,
-      shieldReady: true,
+    const initial = run.snapshot();
+    for (let count = 1; count <= 3; count += 1) {
+      const z = run.renderPlayer.absoluteZM;
+      run.__debugReplacePickups([pickup('boing', z), pickup('shield', z)]);
+      clearTick(run);
+      clearTick(run);
+      expect(run.snapshot().boosters).toMatchObject({
+        doubleJumpCount: count,
+        shieldCount: count,
+      });
+      expect(
+        run.drainEvents().filter((event) => event.type === 'pickup'),
+      ).toHaveLength(2);
+    }
+    expect(initial.boosters).toMatchObject({
+      doubleJumpCount: 0,
+      shieldCount: 0,
     });
-    expect(
-      run.drainEvents().filter((event) => event.type === 'pickup'),
-    ).toHaveLength(2);
-    run.__debugReplacePickups([pickup('shield')]);
-    run.tick(EMPTY_INPUT);
-    expect(run.snapshot().boosters.shieldReady).toBe(true);
-    run.tick(EMPTY_INPUT);
-    expect(
-      run.drainEvents().filter((event) => event.type === 'pickup'),
-    ).toHaveLength(1);
+    run.setPaused(true);
+    const paused = run.snapshot();
+    for (let i = 0; i < 100; i += 1) run.tick(tap);
+    expect(run.snapshot()).toEqual(paused);
     run.restart();
     expect(run.snapshot().boosters).toMatchObject({
-      doubleJumpReady: false,
-      shieldReady: false,
+      doubleJumpCount: 0,
+      shieldCount: 0,
       protectionS: 0,
       rocket: null,
       effect: null,
     });
   });
+
+  it.each(['start', 'restart'] as const)(
+    'does not carry unused charges through game-over into %s',
+    (nextRun) => {
+      const run = emptyRun();
+      run.__debugSetBoosters({ doubleJumpCount: 4 });
+      run.__debugReplaceTraffic([
+        createTrafficVehicle('last-hit', 'test', 'bus', 'ordinary', 1, 0, 0),
+      ]);
+      run.tick(drive);
+      expect(run.phaseName).toBe('game-over');
+      expect(run.renderBoosters.doubleJumpCount).toBe(4);
+      run[nextRun]();
+      expect(run.phaseName).toBe('running');
+      expect(run.renderBoosters).toMatchObject({
+        doubleJumpCount: 0,
+        shieldCount: 0,
+        rocket: null,
+      });
+    },
+  );
 
   it('retains only a bounded live pickup window through 100 km of forward progress', () => {
     const run = emptyRun();
@@ -274,7 +301,7 @@ describe('collectible generation and collection', () => {
 describe('Boing! double jump', () => {
   it('keeps held auto-hop and key repeat from consuming a charge, but accepts a second tap between ticks', () => {
     const run = emptyRun();
-    run.__debugSetBoosters({ doubleJumpReady: true });
+    run.__debugSetBoosters({ doubleJumpCount: 1 });
     const keys = new InputBuffer();
     keys.keyDown('Space');
     clearTick(run, keys.consume());
@@ -282,7 +309,7 @@ describe('Boing! double jump', () => {
       keys.keyDown('Space', true);
       clearTick(run, keys.consume());
     }
-    expect(run.snapshot().boosters.doubleJumpReady).toBe(true);
+    expect(run.snapshot().boosters.doubleJumpCount).toBe(1);
     keys.keyUp('Space');
     keys.keyDown('Space');
     keys.keyUp('Space');
@@ -292,7 +319,7 @@ describe('Boing! double jump', () => {
     expect(run.renderPlayer.verticalSpeedMps).toBeGreaterThan(
       DOUBLE_JUMP_IMPULSE_MPS - 1,
     );
-    expect(run.snapshot().boosters.doubleJumpReady).toBe(false);
+    expect(run.snapshot().boosters.doubleJumpCount).toBe(0);
     expect(
       run.drainEvents().filter((event) => event.type === 'double-jump'),
     ).toHaveLength(1);
@@ -302,7 +329,7 @@ describe('Boing! double jump', () => {
     'refreshes upward velocity and gives over 1.6 seconds of airtime at jump tick %i',
     (jumpTick) => {
       const run = emptyRun();
-      run.__debugSetBoosters({ doubleJumpReady: true });
+      run.__debugSetBoosters({ doubleJumpCount: 1 });
       clearTick(run, tap);
       for (let i = 1; i < jumpTick; i += 1) clearTick(run);
       const height = run.renderPlayer.yM;
@@ -322,26 +349,47 @@ describe('Boing! double jump', () => {
 
   it('cannot triple jump, even if a second spring is collected in flight', () => {
     const run = emptyRun();
-    run.__debugSetBoosters({ doubleJumpReady: true });
+    run.__debugSetBoosters({ doubleJumpCount: 3 });
     clearTick(run, tap);
     clearTick(run, tap);
-    run.__debugSetBoosters({ doubleJumpReady: true });
+    expect(run.renderBoosters.doubleJumpCount).toBe(2);
     for (let i = 0; i < 10; i += 1) clearTick(run, tap);
+    expect(run.renderBoosters.doubleJumpCount).toBe(2);
+    run.__debugReplacePickups([pickup('boing', run.renderPlayer.absoluteZM)]);
+    clearTick(run, tap);
     expect(
       run.drainEvents().filter((event) => event.type === 'double-jump'),
     ).toHaveLength(1);
-    expect(run.snapshot().boosters.doubleJumpReady).toBe(true);
+    expect(run.snapshot().boosters.doubleJumpCount).toBe(3);
     while (run.renderPlayer.airborne) clearTick(run);
     clearTick(run, tap);
     clearTick(run, tap);
+    expect(run.renderBoosters.doubleJumpCount).toBe(2);
     expect(
       run.drainEvents().filter((event) => event.type === 'double-jump'),
     ).toHaveLength(1);
   });
 
+  it('spends stacked charges one per flight until empty without going negative', () => {
+    const run = emptyRun();
+    run.__debugSetBoosters({ doubleJumpCount: 3 });
+    for (let flight = 0; flight < 4; flight += 1) {
+      run.drainEvents();
+      clearTick(run, tap);
+      clearTick(run, tap);
+      expect(run.renderBoosters.doubleJumpCount).toBe(Math.max(0, 2 - flight));
+      expect(
+        run.drainEvents().filter((event) => event.type === 'double-jump'),
+      ).toHaveLength(flight < 3 ? 1 : 0);
+      let ticks = 0;
+      while (run.renderPlayer.airborne && ticks++ < 240) clearTick(run);
+      expect(run.renderPlayer.airborne).toBe(false);
+    }
+  });
+
   it('uses the boosted altitude for collision detection when jumping a bus', () => {
     const run = emptyRun();
-    run.__debugSetBoosters({ doubleJumpReady: true });
+    run.__debugSetBoosters({ doubleJumpCount: 1 });
     clearTick(run, tap);
     for (let i = 0; i < 25; i += 1) clearTick(run);
     clearTick(run, tap);
@@ -364,9 +412,50 @@ describe('Boing! double jump', () => {
 });
 
 describe('Bubble Buddy', () => {
+  it('spends one stacked shield per impact, preserves the next through grace, then runs out', () => {
+    const run = emptyRun();
+    run.__debugSetBoosters({ shieldCount: 2 });
+    const hit = () => {
+      const z = run.renderPlayer.absoluteZM;
+      run.__debugReplaceTraffic([
+        createTrafficVehicle('bonk-car', 'test', 'sedan', 'ordinary', 1, z, 0),
+        createTrafficVehicle(
+          'bonk-bus',
+          'test',
+          'bus',
+          'ordinary',
+          1,
+          z + 1,
+          0,
+        ),
+      ]);
+      run.tick(drive);
+    };
+    for (const remaining of [1, 0]) {
+      hit();
+      expect(run.phaseName).toBe('running');
+      expect(run.renderBoosters.shieldCount).toBe(remaining);
+      expect(
+        run.drainEvents().filter((event) => event.type === 'shield-pop'),
+      ).toHaveLength(1);
+      hit();
+      expect(run.renderBoosters.shieldCount).toBe(remaining);
+      expect(
+        run.drainEvents().filter((event) => event.type === 'shield-pop'),
+      ).toHaveLength(0);
+      for (let i = 0; i < Math.ceil(SHIELD_GRACE_S / FIXED_DT) + 1; i += 1)
+        clearTick(run);
+    }
+    hit();
+    expect(run.phaseName).toBe('game-over');
+    expect(run.renderBoosters.shieldCount).toBe(0);
+    expect(
+      run.drainEvents().filter((event) => event.type === 'crash'),
+    ).toHaveLength(1);
+  });
   it('absorbs one multi-car contact, clears those colliders, then lets the next crash end the run', () => {
     const run = emptyRun();
-    run.__debugSetBoosters({ shieldReady: true });
+    run.__debugSetBoosters({ shieldCount: 1 });
     run.__debugReplaceTraffic([
       createTrafficVehicle('bonk-1', 'test', 'sedan', 'ordinary', 1, 0, 0),
       createTrafficVehicle('bonk-2', 'test', 'bus', 'ordinary', 1, 1, 0),
@@ -374,7 +463,7 @@ describe('Bubble Buddy', () => {
     run.tick(EMPTY_INPUT);
     expect(run.phaseName).toBe('running');
     expect(run.snapshot().boosters).toMatchObject({
-      shieldReady: false,
+      shieldCount: 0,
       protectionS: SHIELD_GRACE_S,
     });
     expect(
@@ -403,7 +492,7 @@ describe('Bubble Buddy', () => {
 
   it('blocks another contact during recovery and freezes the timer while paused', () => {
     const run = emptyRun();
-    run.__debugSetBoosters({ shieldReady: true });
+    run.__debugSetBoosters({ shieldCount: 1 });
     run.__debugReplaceTraffic([
       createTrafficVehicle('hit', 'test', 'sedan', 'ordinary', 1, 0, 0),
     ]);
@@ -441,7 +530,7 @@ describe('Yeet Rocket', () => {
     'keeps its speed, height, duration and inventory while steering through active lanes (seed %i)',
     (seed) => {
       const run = launchRocket(seed);
-      run.__debugSetBoosters({ doubleJumpReady: true, shieldReady: true });
+      run.__debugSetBoosters({ doubleJumpCount: 3, shieldCount: 2 });
       const launch = run.snapshot();
       expect(launch.boosters.rocket).not.toBeNull();
       let maxHeight = 0;
@@ -467,8 +556,8 @@ describe('Yeet Rocket', () => {
       });
       expect(hasLane(after.laneMask, after.player.lane)).toBe(true);
       expect(after.boosters).toMatchObject({
-        doubleJumpReady: true,
-        shieldReady: true,
+        doubleJumpCount: 3,
+        shieldCount: 2,
         protectionS: 0,
       });
       expect(after.bonusScore).toBeGreaterThanOrEqual(ROCKET_BONUS);
@@ -576,7 +665,7 @@ describe('Yeet Rocket', () => {
 
   it('still lets Bubble Buddy absorb a landing collision by consuming the shield', () => {
     const run = launchRocket();
-    run.__debugSetBoosters({ shieldReady: true });
+    run.__debugSetBoosters({ shieldCount: 2 });
     run.__debugReplaceTraffic([
       createTrafficVehicle(
         'shield-hit',
@@ -590,7 +679,7 @@ describe('Yeet Rocket', () => {
     ]);
     for (let i = 0; i < flightTicks; i += 1) run.tick(drive);
     expect(run.phaseName).toBe('running');
-    expect(run.renderBoosters.shieldReady).toBe(false);
+    expect(run.renderBoosters.shieldCount).toBe(1);
     expect(
       run.drainEvents().filter((event) => event.type === 'shield-pop'),
     ).toHaveLength(1);
@@ -683,7 +772,7 @@ describe('Yeet Rocket', () => {
       ).toBe(true);
       expect(run.renderBoosters).toMatchObject({
         rocket: null,
-        shieldReady: false,
+        shieldCount: 0,
         protectionS: 0,
       });
     },
@@ -780,8 +869,8 @@ describe('Yeet Rocket', () => {
         ).toBe(true);
       }
       expect(run.renderBoosters).toMatchObject({
-        doubleJumpReady: false,
-        shieldReady: false,
+        doubleJumpCount: 0,
+        shieldCount: 0,
         rocket: null,
       });
       expect(
@@ -790,7 +879,7 @@ describe('Yeet Rocket', () => {
       // Grounded pickup contact works again immediately after the flight.
       run.__debugReplacePickups([pickup('boing', run.renderPlayer.absoluteZM)]);
       clearTick(run);
-      expect(run.renderBoosters.doubleJumpReady).toBe(true);
+      expect(run.renderBoosters.doubleJumpCount).toBe(1);
       expect(
         run.drainEvents().filter((event) => event.type === 'pickup'),
       ).toHaveLength(1);

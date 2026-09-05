@@ -19,9 +19,9 @@ import {
   Volume2,
   VolumeX,
   ChevronsUp,
-  Shield,
 } from 'lucide-react';
 import { makeBoosterState } from './game/boosters';
+import { BoosterHud } from './game/BoosterHud';
 import { FIXED_DT, LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
@@ -96,8 +96,10 @@ function statusPayload(snapshot: RunSnapshot, best: number) {
     lane: snapshot.player.lane + 1,
     activeLanes: snapshot.laneCount,
     jumpGateVisible: snapshot.activeCertificate?.kind === 'jump',
-    doubleJumpReady: snapshot.boosters.doubleJumpReady,
-    shieldReady: snapshot.boosters.shieldReady,
+    doubleJumpReady: snapshot.boosters.doubleJumpCount > 0,
+    shieldReady: snapshot.boosters.shieldCount > 0,
+    doubleJumpCount: snapshot.boosters.doubleJumpCount,
+    shieldCount: snapshot.boosters.shieldCount,
     rocketActive: snapshot.boosters.rocket !== null,
   };
 }
@@ -401,28 +403,10 @@ export function AutorooApp() {
                 <Pause />
               </Button>
             )}
-            <ul className="booster-hud" aria-label="Booster inventory">
-              <li
-                className="booster-slot boing-slot"
-                data-ready={snapshot.boosters.doubleJumpReady}
-              >
-                <ChevronsUp aria-hidden="true" />
-                <span className="sr-only">
-                  {snapshot.boosters.doubleJumpReady
-                    ? 'Double jump ready'
-                    : 'No double jump'}
-                </span>
-              </li>
-              <li
-                className="booster-slot shield-slot"
-                data-ready={snapshot.boosters.shieldReady}
-              >
-                <Shield aria-hidden="true" />
-                <span className="sr-only">
-                  {snapshot.boosters.shieldReady ? 'Shield ready' : 'No shield'}
-                </span>
-              </li>
-            </ul>
+            <BoosterHud
+              doubleJumpCount={snapshot.boosters.doubleJumpCount}
+              shieldCount={snapshot.boosters.shieldCount}
+            />
             <div className="score-chip best-chip">
               <span>PERSONAL BEST</span>
               <strong>{formatScore(best)}</strong>

@@ -2301,11 +2301,11 @@ export class AutorooSimulation {
     if (
       input.jumpTapped &&
       this.player.airborne &&
-      this.boosters.doubleJumpReady &&
+      this.boosters.doubleJumpCount > 0 &&
       !this.boosters.doubleJumpUsedThisFlight &&
       !this.boosters.rocket
     ) {
-      this.boosters.doubleJumpReady = false;
+      this.boosters.doubleJumpCount -= 1;
       this.boosters.doubleJumpUsedThisFlight = true;
       this.boosters.doubleJumpOriginYM = this.player.yM;
       this.boosters.doubleJumpElapsedS = 0;
@@ -2325,8 +2325,8 @@ export class AutorooSimulation {
     );
     if ((outcome & WORLD_JUMPED) !== 0) this.emitEvent({ type: 'jump' });
     if ((outcome & WORLD_CRASHED) !== 0) {
-      if (this.boosters.shieldReady) {
-        this.boosters.shieldReady = false;
+      if (this.boosters.shieldCount > 0) {
+        this.boosters.shieldCount -= 1;
         this.boosters.protectionS = SHIELD_GRACE_S;
         // The bubble knocks the hit traffic away without stopping the player.
         // Removing those colliders also prevents a pass bonus for the impact.
@@ -2434,9 +2434,9 @@ export class AutorooSimulation {
       this.pickups.splice(index--, 1);
       this.emitEvent({ type: 'pickup', kind: pickup.kind });
       if (pickup.kind === 'boing') {
-        this.boosters.doubleJumpReady = true;
+        this.boosters.doubleJumpCount += 1;
       } else if (pickup.kind === 'shield') {
-        this.boosters.shieldReady = true;
+        this.boosters.shieldCount += 1;
       } else {
         this.launchRocket();
         break;

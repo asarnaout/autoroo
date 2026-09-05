@@ -22,14 +22,16 @@ object pools, while React owns the HUD and menus.
   Space jumps, and holding it hops again on each landing; Escape pauses.
 - Distance is scored from the furthest metre reached. Jumping a car adds 100,
   jumping a bus adds 250, and a grounded adjacent-lane close pass adds 25.
-- Collect floating **Boing!** springs to carry one extra jump. Release Space
+- Collect floating **Boing!** springs to stock up on extra jumps. Release Space
   and press it again at any point in the air, including while falling, for a
   goofy somersault, spring sound, and a fresh upward impulse with gentler gravity.
   One extra jump per flight; holding Space keeps the existing automatic hops.
   A brief double-jump hint appears only on the first spring collection, remembered
   on this browser across restarts and reloads. Other boosters show no banners.
-- **Bubble Buddy** absorbs one collision and knocks the hit vehicles away,
-  with 1.5 seconds of recovery protection. Only one shield can be carried.
+- Each **Bubble Buddy** shield absorbs one collision and knocks the hit vehicles
+  away, with 1.5 seconds of recovery protection. Springs and shields accumulate
+  during a run; the small HUD counts disappear at zero. Every new run starts
+  with an empty inventory.
 - The rare **Yeet Rocket** launches automatically on collection: a four-second,
   480 m flight with the same midair lane changes and barrel rolls as jumping.
   Traffic stays on the road, collisions still count, and landing earns +750

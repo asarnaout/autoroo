@@ -21,8 +21,9 @@ export interface RocketFlight {
 }
 
 export interface BoosterState {
-  doubleJumpReady: boolean;
-  shieldReady: boolean;
+  /** Charges belong to this run and reset when a new run starts. */
+  doubleJumpCount: number;
+  shieldCount: number;
   /** Remaining simulation time, so protection freezes when paused. */
   protectionS: number;
   doubleJumpOriginYM: number | null;

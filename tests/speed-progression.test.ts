@@ -101,7 +101,7 @@ describe('score-based driving speed', () => {
       const run = clearRun();
       clearTick(run, true);
       if (doubleJump) {
-        run.__debugSetBoosters({ doubleJumpReady: true });
+        run.__debugSetBoosters({ doubleJumpCount: 1 });
         clearTick(run, true, true);
       }
       const takeoffSpeed = run.renderPlayer.takeoffSpeedMps;

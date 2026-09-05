@@ -73,9 +73,12 @@
 }
 .booster-slot {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  padding: 0 6px;
   height: 32px;
   border: 1px solid rgb(189 200 219 / 30%);
   border-radius: 10px;
@@ -90,6 +93,7 @@
 .booster-slot svg {
   width: 18px;
   height: 18px;
+  flex-shrink: 0;
 }
 .boing-slot {
   --booster-color: var(--boing);
@@ -102,15 +106,17 @@
   color: var(--booster-color);
   opacity: 1;
 }
-.booster-slot[data-ready='true']::after {
-  content: '';
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
+.booster-count {
+  min-width: 18px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  background: var(--booster-color);
+  color: #09142b;
+  font-size: 0.75rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  text-align: center;
 }
 .booster-notice {
   position: absolute;

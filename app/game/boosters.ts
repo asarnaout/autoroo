@@ -49,14 +49,15 @@ export const BOOSTER_INFO = {
     name: 'Bubble Buddy',
     rarity: 'Uncommon',
     color: '#63e7ff',
-    instruction: 'Soaks up one crash. Carry one at a time.',
+    instruction:
+      'Each bubble soaks up one crash. Collect more to stack shields.',
   },
 } as const;
 
 export function makeBoosterState(): BoosterState {
   return {
-    doubleJumpReady: false,
-    shieldReady: false,
+    doubleJumpCount: 0,
+    shieldCount: 0,
     protectionS: 0,
     doubleJumpOriginYM: null,
     doubleJumpElapsedS: 0,

@@ -39,7 +39,7 @@ describe('original booster geometry and reusable effects', () => {
     const meshCount = scene.meshes.length;
     const materialCount = scene.materials.length;
     const boosts = makeBoosterState();
-    boosts.shieldReady = true;
+    boosts.shieldCount = 3;
     const pickups = [
       {
         id: 'spring',
@@ -77,6 +77,18 @@ describe('original booster geometry and reusable effects', () => {
       true,
     );
     expect(() => scene.render()).not.toThrow();
+    boosts.shieldCount = 2;
+    boosts.protectionS = 1;
+    visuals.update([], boosts, 0, -1.8, 0, 5);
+    expect(scene.getMeshByName('car-protection-bubble')?.isEnabled()).toBe(
+      true,
+    );
+    boosts.shieldCount = 0;
+    boosts.protectionS = 0;
+    visuals.update([], boosts, 0, -1.8, 0, 6);
+    expect(scene.getMeshByName('car-protection-bubble')?.isEnabled()).toBe(
+      false,
+    );
     scene.dispose();
     engine.dispose();
   });

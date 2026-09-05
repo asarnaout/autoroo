@@ -427,6 +427,7 @@ export function AutorooApp() {
               <Button
                 className="start-play-button"
                 size="lg"
+                aria-keyshortcuts="Space"
                 disabled={!sceneReady}
                 onClick={startRun}
               >

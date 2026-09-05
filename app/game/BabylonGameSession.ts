@@ -220,6 +220,7 @@ export class BabylonGameSession {
   private lastPublishedPhase: RunPhase | null = null;
   private disposed = false;
   private ready = false;
+  private startSpaceHeld = false;
   private muted = false;
   private resolutionSampleFrames = 0;
   private resolutionSampleTotalMs = 0;
@@ -228,6 +229,11 @@ export class BabylonGameSession {
   private readonly target = new Vector3();
 
   private readonly onKeyDown = (event: KeyboardEvent) => {
+    // Consume the menu shortcut until release, including repeats after starting.
+    if (event.code === 'Space' && this.startSpaceHeld) {
+      event.preventDefault();
+      return;
+    }
     const active = document.activeElement === this.canvas;
     const phase = this.simulation.phaseName;
     const target = event.target;
@@ -235,9 +241,26 @@ export class BabylonGameSession {
       (event.code === 'Enter' || event.code === 'Space') &&
       target instanceof Element &&
       target !== this.canvas &&
-      target.closest('button, a, input, select, textarea, [role="button"]') !==
-        null;
+      target.closest(
+        'button, a, input, select, textarea, [role="button"], [role="dialog"], [contenteditable]:not([contenteditable="false"])',
+      ) !== null;
     if (activatesFocusedControl) return;
+    if (event.code === 'Space' && phase === 'ready') {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
+      event.preventDefault();
+      if (this.ready && !event.repeat) {
+        this.startSpaceHeld = true;
+        this.start();
+      }
+      return;
+    }
     if (
       isGameKey(event.code) &&
       (active || phase === 'running' || phase === 'paused')
@@ -254,10 +277,12 @@ export class BabylonGameSession {
   };
 
   private readonly onKeyUp = (event: KeyboardEvent) => {
+    if (event.code === 'Space') this.startSpaceHeld = false;
     this.input.keyUp(event.code);
   };
 
   private readonly onBlur = () => {
+    this.startSpaceHeld = false;
     this.input.clear();
     if (this.simulation.phaseName === 'running') this.setPaused(true);
   };

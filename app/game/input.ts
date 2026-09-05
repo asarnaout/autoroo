@@ -24,7 +24,7 @@ const GAME_KEYS = new Set([
 
 export class InputBuffer {
   private readonly held = new Map<string, DrivingControl>();
-  private autoAccelerate = false;
+  private autoAccelerate = true;
   private readonly laneQueue: (-1 | 1)[] = [];
   private jumpQueued = false;
 

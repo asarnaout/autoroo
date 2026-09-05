@@ -7,11 +7,11 @@ object pools, while React owns the HUD and menus.
 
 ## Gameplay
 
-- On phones and tablets, the car accelerates automatically. Tap the left/right
+- The car accelerates automatically on desktop, phones, and tablets. On touchscreens, tap the left/right
   buttons to flip lanes, hold **JUMP** to keep hopping, and hold **BRAKE** to slow
   down. Release and tap JUMP again to use a collected midair jump. Pause and sound
   controls stay visible in both orientations. Desktop keyboard controls also work.
-- Hold Up to accelerate and Down to brake. Left and Right trigger a quick
+- Hold Down to brake; release it to accelerate again. Left and Right trigger a quick
   lateral barrel roll into the next active lane, including in the air. The
   physical lane sweep remains collidable, so an evasive move can be too late.
   Space jumps, and holding it hops again on each landing; Escape pauses.
@@ -56,8 +56,8 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. Use Left/Right to flip lanes, Up/Down to control
-speed, Space to jump, and Escape to pause.
+Open <http://localhost:3000>. The car accelerates automatically. Use Left/Right
+to flip lanes, hold Down to brake, Space to jump, and Escape to pause.
 
 ## Verify
 

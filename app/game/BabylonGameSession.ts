@@ -434,7 +434,6 @@ export class BabylonGameSession {
 
   setTouchDriving(enabled: boolean): void {
     this.touchDriving = enabled;
-    this.input.setAutoAccelerate(enabled);
   }
 
   controlDown(control: DrivingControl, source: string): void {

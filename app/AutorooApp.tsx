@@ -579,11 +579,8 @@ export function AutorooApp() {
                   <span>Flip lanes</span>
                 </span>
                 <span className="start-control">
-                  <span className="start-keys">
-                    <Kbd>↑</Kbd>
-                    <Kbd>↓</Kbd>
-                  </span>
-                  <span>Speed</span>
+                  <Kbd>↓</Kbd>
+                  <span>Brake</span>
                 </span>
                 <span className="start-control">
                   <Kbd className="space-key">Space</Kbd>
@@ -644,13 +641,7 @@ export function AutorooApp() {
 
       {isPlaying && snapshot.rearWarning && (
         <div className="rear-warning" role="alert">
-          {touchDriving ? (
-            'TRAFFIC CATCHING UP — RELEASE BRAKE'
-          ) : (
-            <>
-              TRAFFIC CATCHING UP — HOLD <Kbd>↑</Kbd>
-            </>
-          )}
+          TRAFFIC CATCHING UP — RELEASE BRAKE
         </div>
       )}
 

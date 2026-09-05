@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { InputBuffer } from '../app/game/input';
 import { parseStoredBest, saveBest } from '../app/game/persistence';
+import { AutorooSimulation } from '../app/game/simulation';
 
 describe('keyboard input buffering', () => {
   it('queues a discrete lane snap and ignores key repeat', () => {
@@ -13,6 +14,7 @@ describe('keyboard input buffering', () => {
 
   it('keeps acceleration and Space active while they are held', () => {
     const input = new InputBuffer();
+    input.setAutoAccelerate(false);
     input.keyDown('ArrowUp');
     input.keyDown('Space');
     expect(input.consume()).toMatchObject({
@@ -37,6 +39,40 @@ describe('keyboard input buffering', () => {
     input.keyUp('Space');
     expect(input.consume().jumpPressed).toBe(true);
     expect(input.consume().jumpPressed).toBe(false);
+  });
+
+  it('automatically drives on desktop, brakes with Down, and resumes after release', () => {
+    const input = new InputBuffer();
+    const run = new AutorooSimulation(0xa770_2026);
+    run.start();
+    for (let tick = 0; tick < 60; tick += 1) run.tick(input.consume());
+    const driving = run.snapshot().player;
+    expect(driving.absoluteZM).toBeGreaterThan(0);
+    expect(driving.speedMps).toBeGreaterThan(0);
+
+    input.keyDown('ArrowDown');
+    for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
+    const brakingSpeed = run.snapshot().player.speedMps;
+    expect(brakingSpeed).toBeLessThan(driving.speedMps);
+    input.keyUp('ArrowDown');
+    for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
+    expect(run.snapshot().player.speedMps).toBeGreaterThan(brakingSpeed);
+
+    input.keyDown('ArrowRight');
+    input.keyDown('Space');
+    run.tick(input.consume());
+    expect(run.snapshot().player.laneChangeDirection).toBe(1);
+    expect(run.snapshot().player.airborne).toBe(true);
+
+    run.setPaused(true);
+    input.clear();
+    const paused = run.snapshot().player.absoluteZM;
+    for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
+    expect(run.snapshot().player.absoluteZM).toBe(paused);
+    run.restart();
+    for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
+    expect(run.snapshot().player.speedMps).toBeGreaterThan(0);
+    expect(run.snapshot().player.airborne).toBe(false);
   });
 });
 

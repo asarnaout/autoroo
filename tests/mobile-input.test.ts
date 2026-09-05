@@ -24,6 +24,7 @@ describe('mobile driving input', () => {
 
   it('releasing one pointer leaves another pointer or keyboard hold active', () => {
     const input = new InputBuffer();
+    input.setAutoAccelerate(false);
     input.press('accelerate', 'pointer:1');
     input.press('accelerate', 'pointer:2');
     input.keyDown('ArrowUp');

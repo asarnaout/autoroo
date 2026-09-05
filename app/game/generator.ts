@@ -66,7 +66,31 @@ function changedLane(from: LaneMask, to: LaneMask): LaneIndex {
   return 1;
 }
 
+// Witness replay asks for the same nearby modules thousands of times. Keep
+// immutable results in a fixed-size cache so endless runs retain bounded memory.
+const MODULE_CACHE_SIZE = 128;
+const moduleCache: Array<
+  | {
+      seed: number;
+      index: number;
+      module: RoadModule;
+    }
+  | undefined
+> = Array.from({ length: MODULE_CACHE_SIZE });
+
 export function roadModuleAt(seed: number, moduleIndex: number): RoadModule {
+  const index = Math.max(0, Math.floor(moduleIndex));
+  const slot = index % MODULE_CACHE_SIZE;
+  const hit = moduleCache[slot];
+  if (hit && hit.seed === seed && hit.index === index) return hit.module;
+  const roadModule = createRoadModuleAt(seed, index);
+  if (roadModule.transition) Object.freeze(roadModule.transition);
+  Object.freeze(roadModule);
+  moduleCache[slot] = { seed, index, module: roadModule };
+  return roadModule;
+}
+
+function createRoadModuleAt(seed: number, moduleIndex: number): RoadModule {
   const safeIndex = Math.max(0, Math.floor(moduleIndex));
   const epoch = Math.floor(safeIndex / 20);
   const localIndex = safeIndex % 20;

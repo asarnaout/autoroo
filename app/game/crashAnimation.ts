@@ -45,6 +45,14 @@ export class CrashAnimation {
     this.elapsedS = 0;
   }
 
+  get isPlaying(): boolean {
+    return (
+      this.initial !== null &&
+      this.elapsedS <
+        (this.reducedMotion ? REDUCED_CRASH_DURATION_S : CRASH_DURATION_S)
+    );
+  }
+
   /** True exactly once, on the frame that finishes the reaction. */
   advance(deltaS: number): boolean {
     if (!this.initial || !Number.isFinite(deltaS)) return false;

@@ -226,6 +226,7 @@ export class BabylonGameSession {
   private lastPublishedPhase: RunPhase | null = null;
   private disposed = false;
   private ready = false;
+  private presentationDirty = true;
   private startSpaceHeld = false;
   private muted = false;
   private readonly renderQuality: AdaptiveRenderQuality;
@@ -299,9 +300,15 @@ export class BabylonGameSession {
 
   private readonly onVisibility = () => {
     if (document.visibilityState === 'hidden') this.onBlur();
+    else this.presentationDirty = true;
+  };
+
+  private readonly onPageShow = () => {
+    this.presentationDirty = true;
   };
 
   private readonly onResize = () => {
+    this.presentationDirty = true;
     this.viewportWidth = this.canvas.clientWidth;
     this.viewportHeight = this.canvas.clientHeight;
     if (
@@ -340,6 +347,9 @@ export class BabylonGameSession {
     this.engine.setHardwareScalingLevel(
       this.renderQuality.hardwareScalingLevel,
     );
+    this.engine.onContextRestoredObservable.add(() => {
+      this.presentationDirty = true;
+    });
     this.scene = new Scene(this.engine);
     const horizonColor = Color3.FromHexString(NIGHT_PALETTE.skyHorizon);
     this.scene.clearColor = new Color4(
@@ -405,6 +415,7 @@ export class BabylonGameSession {
   }
 
   start(): void {
+    this.presentationDirty = true;
     this.crashAnimation.reset();
     this.simulation.start();
     this.input.clear();
@@ -416,6 +427,7 @@ export class BabylonGameSession {
   }
 
   restart(): void {
+    this.presentationDirty = true;
     this.crashAnimation.reset();
     this.simulation.restart();
     this.input.clear();
@@ -427,10 +439,12 @@ export class BabylonGameSession {
   }
 
   setPaused(paused: boolean): void {
+    this.presentationDirty = true;
     this.simulation.setPaused(paused);
     this.input.clear();
     this.audio.setGameplayActive(this.simulation.phaseName === 'running');
     if (this.simulation.phaseName === 'running') void this.audio.wake();
+    else this.audio.updateEngine(this.simulation.renderPlayer.speedMps, false);
     this.publish(true);
   }
 
@@ -440,6 +454,7 @@ export class BabylonGameSession {
   }
 
   setTouchDriving(enabled: boolean): void {
+    this.presentationDirty = true;
     this.touchDriving = enabled;
   }
 
@@ -469,6 +484,7 @@ export class BabylonGameSession {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onBlur);
     window.removeEventListener('resize', this.onResize);
+    window.removeEventListener('pageshow', this.onPageShow);
     document.removeEventListener('visibilitychange', this.onVisibility);
     this.canvas.removeEventListener('pointerdown', this.focusCanvas);
     this.resizeObserver?.disconnect();
@@ -488,6 +504,7 @@ export class BabylonGameSession {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onBlur);
     window.addEventListener('resize', this.onResize);
+    window.addEventListener('pageshow', this.onPageShow);
     document.addEventListener('visibilitychange', this.onVisibility);
     this.canvas.addEventListener('pointerdown', this.focusCanvas);
     this.resizeObserver = new ResizeObserver(this.onResize);
@@ -1000,6 +1017,7 @@ export class BabylonGameSession {
     if (this.disposed) return;
     this.buildModelPools();
     this.ready = true;
+    this.presentationDirty = true;
     this.callbacks.onReady();
   }
 
@@ -1011,8 +1029,10 @@ export class BabylonGameSession {
       this.prepareVehicleMaterials(container, config);
       return;
     }
-    if (BUILDING_KEYS.includes(config.key as BuildingModelKey))
+    if (BUILDING_KEYS.includes(config.key as BuildingModelKey)) {
       this.applyNightWindowGlow(container, config.key);
+      for (const material of container.materials) material.freeze();
+    }
   }
 
   /**
@@ -1338,10 +1358,25 @@ export class BabylonGameSession {
   private frame(): void {
     if (this.disposed) return;
     const rawDeltaMs = this.engine.getDeltaTime();
+    const visible = document.visibilityState === 'visible';
+    if (!visible) {
+      this.renderQuality.sample(rawDeltaMs, false);
+      return;
+    }
     const deltaMs = Math.min(100, rawDeltaMs);
-    const crashFinished = this.crashAnimation.advance(
-      document.visibilityState === 'visible' ? deltaMs / 1000 : 0,
-    );
+    const crashFinished = this.crashAnimation.advance(deltaMs / 1000);
+    // Keep RAF alive for fresh resume deltas, but do no scene work for an
+    // unchanged menu/pause/final crash frame. Assets and viewport events dirty
+    // the presentation; crash animation keeps drawing through its final pose.
+    if (
+      this.simulation.phaseName !== 'running' &&
+      !this.crashAnimation.isPlaying &&
+      !crashFinished &&
+      !this.presentationDirty
+    ) {
+      this.renderQuality.sample(rawDeltaMs, false);
+      return;
+    }
     if (this.simulation.phaseName === 'running') {
       this.accumulatorS = Math.min(0.25, this.accumulatorS + deltaMs / 1000);
       let steps = 0;
@@ -1367,7 +1402,12 @@ export class BabylonGameSession {
       this.simulation.renderPlayer.speedMps,
       this.simulation.phaseName === 'running' && !this.muted,
     );
+    // Check before drawing: compilation may finish during a render that
+    // already skipped an unready mesh. That frame still needs one more draw.
+    const presentationReady = !this.presentationDirty || this.scene.isReady();
+    this.presentationDirty = false;
     this.scene.render();
+    if (!presentationReady) this.presentationDirty = true;
     if (crashFinished) this.callbacks.onCrashAnimationComplete();
     if (
       this.renderQuality.sample(

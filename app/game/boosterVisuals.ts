@@ -25,6 +25,7 @@ function material(
   result.specularColor = new Color3(0.65, 0.65, 0.65);
   result.specularPower = 56;
   result.alpha = alpha;
+  result.freeze();
   return result;
 }
 
@@ -342,17 +343,16 @@ export class BoosterVisuals {
       scene,
     );
     this.burst.material = this.haloMaterials.boing;
+    const puffMaterials = ['#fff7d6', '#ffac69', '#b4ff49', '#63e7ff'].map(
+      (color, index) => material(scene, `puff-paint-${index}`, color),
+    );
     for (let i = 0; i < 16; i += 1) {
       const puff = CreateSphere(
         `booster-puff-${i}`,
         { diameter: 0.5, segments: 8 },
         scene,
       );
-      puff.material = material(
-        scene,
-        `puff-paint-${i}`,
-        ['#fff7d6', '#ffac69', '#b4ff49', '#63e7ff'][i % 4],
-      );
+      puff.material = puffMaterials[i % puffMaterials.length];
       puff.isPickable = false;
       puff.setEnabled(false);
       this.puffs.push(puff);
@@ -386,6 +386,7 @@ export class BoosterVisuals {
       for (const kind of ['boing', 'rocket', 'shield'] as const) {
         const model = entry.models[kind];
         model.setEnabled(pickup.kind === kind);
+        if (pickup.kind !== kind) continue;
         // Face the chase camera. A wobble keeps the face legible from far away.
         model.rotation.set(
           Math.sin(seconds * 2.8 + i) * 0.08,
@@ -445,6 +446,7 @@ export class BoosterVisuals {
     for (let i = 0; i < this.puffs.length; i += 1) {
       const puff = this.puffs[i];
       puff.setEnabled(burst || rocket);
+      if (!burst && !rocket) continue;
       if (rocket) {
         const t = (seconds * 2 + i / this.puffs.length) % 1;
         puff.position.set(

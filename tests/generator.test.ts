@@ -30,6 +30,23 @@ import {
 import type { LaneIndex } from '../app/game/contracts';
 
 describe('procedural road topology', () => {
+  it('keeps cached topology immutable and correct after eviction or seed changes', () => {
+    const original = Array.from({ length: 200 }, (_, index) =>
+      roadModuleAt(919, index),
+    );
+    for (const roadModule of original) {
+      expect(Object.isFrozen(roadModule)).toBe(true);
+      if (roadModule.transition)
+        expect(Object.isFrozen(roadModule.transition)).toBe(true);
+    }
+    for (let index = 0; index < 2000; index += 1) roadModuleAt(71, index);
+    for (let index = original.length - 1; index >= 0; index -= 1) {
+      expect(roadModuleAt(919, index)).toEqual(original[index]);
+      expect(roadModuleAt(919, index + 0.9)).toEqual(original[index]);
+    }
+    expect(roadModuleAt(919, -1)).toEqual(original[0]);
+  });
+
   it('uses four permanent lane anchors', () => {
     expect(LANE_X).toEqual([-5.4, -1.8, 1.8, 5.4]);
   });

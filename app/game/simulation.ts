@@ -953,7 +953,9 @@ function resolveWorldScoring(
       vehicle.absoluteZM,
       halfExtent,
     );
-    const footprintOverlap = sweptVehicleOverlapInterval(world.player, vehicle);
+    const footprintOverlap = longitudinalOverlap
+      ? sweptVehicleOverlapInterval(world.player, vehicle)
+      : null;
     if (footprintOverlap) {
       if (world.player.airborne || world.player.previousYM > 0)
         vehicle.airborneOverlap = true;
@@ -1901,7 +1903,8 @@ function simulateGroundWitness(
   const newEncounterId = draftedBlockers[0]?.encounterId ?? '';
   const blockerIds = new Set(draftedBlockers.map((vehicle) => vehicle.id));
   const passedBlockerIds = new Set<string>();
-  world.traffic.push(...draftedBlockers.map(cloneTraffic));
+  const draftClones = draftedBlockers.map(cloneTraffic);
+  world.traffic.push(...draftClones);
   const witness: WitnessTracePoint[] = [];
 
   for (let localTick = 0; localTick < MAX_WITNESS_TICKS; localTick += 1) {
@@ -1985,8 +1988,8 @@ function simulateGroundWitness(
         crashedGateBlockerId: null,
       };
     }
-    for (const vehicle of world.traffic) {
-      if (!blockerIds.has(vehicle.id)) continue;
+    // These exact objects are advanced with world.traffic by stepWorld.
+    for (const vehicle of draftClones) {
       const physicallyPassed =
         world.player.absoluteZM >
         vehicle.absoluteZM +

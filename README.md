@@ -22,6 +22,8 @@ object pools, while React owns the HUD and menus.
   and press it again at any point in the air, including while falling, for a
   goofy somersault, spring sound, and a fresh upward impulse with gentler gravity.
   One extra jump per flight; holding Space keeps the existing automatic hops.
+  A brief double-jump hint appears only on the first spring collection, remembered
+  on this browser across restarts and reloads. Other boosters show no banners.
 - **Bubble Buddy** absorbs one collision and knocks the hit vehicles away,
   with 1.5 seconds of recovery protection. Only one shield can be carried.
 - The rare **Yeet Rocket** launches automatically on collection: a four-second,

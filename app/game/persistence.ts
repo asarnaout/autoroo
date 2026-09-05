@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'autoroo.best.v1';
+const DOUBLE_JUMP_HINT_KEY = 'autoroo.double-jump-hint.v1';
 const MAX_PERSISTED_SCORE = 999_999_999;
 
 export interface StoredBest {
@@ -52,6 +53,28 @@ export function saveBest(
   } catch {
     return false;
   }
+}
+
+/** Claim the first-collection hint once per browser, or per session if storage fails. */
+export function createDoubleJumpHintClaim(
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = browserStorage(),
+): () => boolean {
+  let claimed = false;
+  return () => {
+    if (claimed) return false;
+    claimed = true;
+    try {
+      if (storage?.getItem(DOUBLE_JUMP_HINT_KEY) === 'seen') return false;
+    } catch {
+      // The in-memory claim still prevents repeats when reads are blocked.
+    }
+    try {
+      storage?.setItem(DOUBLE_JUMP_HINT_KEY, 'seen');
+    } catch {
+      // Quota/private-mode errors must not interrupt a pickup or repeat its hint.
+    }
+    return true;
+  };
 }
 
 function browserStorage(): Storage | null {

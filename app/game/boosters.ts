@@ -65,8 +65,6 @@ export function makeBoosterState(): BoosterState {
     rocket: null,
     effect: null,
     effectRemainingS: 0,
-    notice: null,
-    noticeRemainingS: 0,
   };
 }
 

@@ -2181,7 +2181,7 @@ export class AutorooSimulation {
       this.boosters.doubleJumpElapsedS = 0;
       this.boosters.doubleJumpInitialAirTimeS = this.player.jumpElapsedS;
       this.player.verticalSpeedMps = DOUBLE_JUMP_IMPULSE_MPS;
-      this.boosterEffect('boing', 'BOING! Physics has left the chat.', 0.8);
+      this.boosterEffect('boing', 0.8);
       this.emitEvent({ type: 'double-jump' });
     }
     const wasRocketFlying = this.boosters.rocket !== null;
@@ -2199,11 +2199,7 @@ export class AutorooSimulation {
         this.world.traffic = this.traffic.filter(
           (vehicle) => !collidesSwept(this.player, vehicle),
         );
-        this.boosterEffect(
-          'shield-pop',
-          'POP! Bubble Buddy took the bonk.',
-          0.75,
-        );
+        this.boosterEffect('shield-pop', 0.75);
         this.emitEvent({ type: 'shield-pop' });
       } else {
         this.phase = 'game-over';
@@ -2258,23 +2254,15 @@ export class AutorooSimulation {
       0,
       this.boosters.effectRemainingS - FIXED_DT,
     );
-    this.boosters.noticeRemainingS = Math.max(
-      0,
-      this.boosters.noticeRemainingS - FIXED_DT,
-    );
     if (this.boosters.effectRemainingS === 0) this.boosters.effect = null;
-    if (this.boosters.noticeRemainingS === 0) this.boosters.notice = null;
   }
 
   private boosterEffect(
     effect: BoosterState['effect'],
-    notice: string,
     durationS: number,
   ): void {
     this.boosters.effect = effect;
     this.boosters.effectRemainingS = durationS;
-    this.boosters.notice = notice;
-    this.boosters.noticeRemainingS = 2.8;
   }
 
   private fillBoosters(): void {
@@ -2311,19 +2299,9 @@ export class AutorooSimulation {
       this.pickups.splice(index--, 1);
       this.emitEvent({ type: 'pickup', kind: pickup.kind });
       if (pickup.kind === 'boing') {
-        const alreadyReady = this.boosters.doubleJumpReady;
         this.boosters.doubleJumpReady = true;
-        this.boosters.notice = alreadyReady
-          ? 'BOING! Already loaded.'
-          : 'BOING! Tap JUMP (or Space) again while airborne.';
-        this.boosters.noticeRemainingS = 3.5;
       } else if (pickup.kind === 'shield') {
-        const alreadyReady = this.boosters.shieldReady;
         this.boosters.shieldReady = true;
-        this.boosters.notice = alreadyReady
-          ? 'Bubble Buddy is already on duty.'
-          : 'Bubble Buddy! One bonk is on us.';
-        this.boosters.noticeRemainingS = 3.5;
       } else {
         this.launchRocket();
         break;
@@ -2355,11 +2333,7 @@ export class AutorooSimulation {
     this.forceCurrentEscapeNextEncounter = false;
     this.lastGateZM = landingZM;
     this.scheduleNextGate();
-    this.boosterEffect(
-      'rocket',
-      'YEEET! Steer midair and stick the landing.',
-      4,
-    );
+    this.boosterEffect('rocket', 4);
     this.emitEvent({ type: 'rocket-launch' });
   }
 
@@ -2367,7 +2341,7 @@ export class AutorooSimulation {
     this.boosters.rocket = null;
     this.boosters.doubleJumpUsedThisFlight = false;
     this.bonusScore += ROCKET_BONUS;
-    this.boosterEffect('landing', `SPECIAL DELIVERY! +${ROCKET_BONUS}`, 0.65);
+    this.boosterEffect('landing', 0.65);
     this.emitEvent({ type: 'rocket-land' });
     this.emitEvent({
       type: 'bonus',

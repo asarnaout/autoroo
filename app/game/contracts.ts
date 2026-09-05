@@ -33,8 +33,6 @@ export interface BoosterState {
   rocket: RocketFlight | null;
   effect: 'boing' | 'rocket' | 'shield-pop' | 'landing' | null;
   effectRemainingS: number;
-  notice: string | null;
-  noticeRemainingS: number;
 }
 
 export interface InputFrame {

@@ -239,7 +239,6 @@ describe('collectible generation and collection', () => {
     run.__debugReplacePickups([pickup('shield')]);
     run.tick(EMPTY_INPUT);
     expect(run.snapshot().boosters.shieldReady).toBe(true);
-    expect(run.snapshot().boosters.notice).toContain('already');
     run.tick(EMPTY_INPUT);
     expect(
       run.drainEvents().filter((event) => event.type === 'pickup'),

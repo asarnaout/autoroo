@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { InputBuffer, isGameKey } from '../app/game/input';
-import { parseStoredBest, saveBest } from '../app/game/persistence';
+import {
+  createDoubleJumpHintClaim,
+  parseStoredBest,
+  saveBest,
+} from '../app/game/persistence';
 import { AutorooSimulation } from '../app/game/simulation';
 
 describe('keyboard input buffering', () => {
@@ -95,4 +99,47 @@ describe('versioned personal best persistence', () => {
     expect(saveBest(19.9, storage)).toBe(true);
     expect(JSON.parse(value)).toEqual({ version: 1, best: 19 });
   });
+});
+
+describe('first-collection double-jump hint', () => {
+  it('shows once and stays dismissed when a new app session uses the same storage', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    saveBest(314, storage);
+    const claim = createDoubleJumpHintClaim(storage);
+    expect(claim()).toBe(true);
+    expect(claim()).toBe(false);
+    expect(claim()).toBe(false);
+    // Simulate a page reload: the new claim has no in-memory history.
+    expect(createDoubleJumpHintClaim(storage)()).toBe(false);
+    expect(parseStoredBest(storage.getItem('autoroo.best.v1'))).toBe(314);
+  });
+
+  it('suppresses repeats within the session when browser storage is unavailable', () => {
+    const claim = createDoubleJumpHintClaim(null);
+    expect(claim()).toBe(true);
+    expect(claim()).toBe(false);
+  });
+
+  it.each(['read', 'write'] as const)(
+    'survives blocked storage %s without repeating the hint',
+    (operation) => {
+      const claim = createDoubleJumpHintClaim({
+        getItem: () => {
+          if (operation === 'read') throw new Error('Storage denied');
+          return null;
+        },
+        setItem: () => {
+          if (operation === 'write') throw new Error('Quota exceeded');
+        },
+      });
+      expect(claim()).toBe(true);
+      expect(claim()).toBe(false);
+    },
+  );
 });

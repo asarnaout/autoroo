@@ -32,11 +32,15 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { BOOSTER_INFO, makeBoosterState } from './game/boosters';
-import { LANE_X, countLanes } from './game/constants';
+import { FIXED_DT, LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
 import type { GameCanvasHandle, GameCanvasProps } from './game/GameCanvas';
-import { loadBest, saveBest } from './game/persistence';
+import {
+  createDoubleJumpHintClaim,
+  loadBest,
+  saveBest,
+} from './game/persistence';
 import { TouchControls, TOUCH_CONTROLS_QUERY } from './game/TouchControls';
 import type { DrivingControl } from './game/input';
 
@@ -112,6 +116,7 @@ export function AutorooApp() {
   const gameRef = useRef<GameCanvasHandle>(null);
   const snapshotRef = useRef<RunSnapshot>(INITIAL_SNAPSHOT);
   const bestRef = useRef(0);
+  const claimDoubleJumpHintRef = useRef<(() => boolean) | null>(null);
   const scoreDeltaTimerRef = useRef<number | null>(null);
   const [snapshot, setSnapshot] = useState(INITIAL_SNAPSHOT);
   const [best, setBest] = useState(0);
@@ -119,6 +124,9 @@ export function AutorooApp() {
   const [loadProgress, setLoadProgress] = useState(0);
   const [muted, setMuted] = useState(false);
   const [scoreDelta, setScoreDelta] = useState(0);
+  const [doubleJumpHintUntilTick, setDoubleJumpHintUntilTick] = useState<
+    number | null
+  >(null);
   const [touchDriving, setTouchDriving] = useState(false);
 
   useEffect(() => {
@@ -170,6 +178,8 @@ export function AutorooApp() {
   const onSnapshot = useCallback(
     (next: RunSnapshot) => {
       const previousPhase = snapshotRef.current.phase;
+      if (next.tick < snapshotRef.current.tick || next.phase === 'game-over')
+        setDoubleJumpHintUntilTick(null);
       snapshotRef.current = next;
       setSnapshot(next);
       if (previousPhase === 'running' && next.phase !== 'running')
@@ -185,6 +195,16 @@ export function AutorooApp() {
   );
 
   const onEvent = useCallback((event: GameEvent) => {
+    if (event.type === 'pickup' && event.kind === 'boing') {
+      // Consume the actual pickup event: a charge can be spent between HUD
+      // snapshots. Initialize storage lazily, and keep this callback stable.
+      claimDoubleJumpHintRef.current ??= createDoubleJumpHintClaim();
+      if (claimDoubleJumpHintRef.current()) {
+        const tick =
+          gameRef.current?.snapshot()?.tick ?? snapshotRef.current.tick;
+        setDoubleJumpHintUntilTick(tick + Math.round(3.5 / FIXED_DT));
+      }
+    }
     if (event.type !== 'bonus') return;
     setScoreDelta((current) => current + event.points);
     if (scoreDeltaTimerRef.current !== null)
@@ -441,16 +461,14 @@ export function AutorooApp() {
               </b>
             </div>
           </div>
-          {isPlaying && snapshot.boosters.notice && (
-            <output className="booster-notice" aria-live="polite">
-              {snapshot.boosters.rocket ? (
-                <Rocket aria-hidden="true" />
-              ) : (
-                <Sparkles aria-hidden="true" />
-              )}
-              {snapshot.boosters.notice}
-            </output>
-          )}
+          {isPlaying &&
+            doubleJumpHintUntilTick !== null &&
+            snapshot.tick < doubleJumpHintUntilTick && (
+              <output className="booster-notice" aria-live="polite">
+                <ChevronsUp aria-hidden="true" />
+                Double jump ready! Tap JUMP (or Space) again while airborne.
+              </output>
+            )}
         </>
       )}
 

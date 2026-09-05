@@ -70,10 +70,11 @@ built-in image-generation tool, following the project owner's selected designs.
 `autoroo-city.png` supplies the surrounding city, and `autoroo-title-city.png`
 and `autoroo-title-city-portrait.png` combine the googly-eyed sticker logo with
 the city for landscape and portrait displays. Menu buttons, score, sound,
-credits, and keyboard hints are rendered separately as interactive HTML.
+and keyboard hints are rendered separately as interactive HTML. A small info
+button beside the sound control opens the asset acknowledgements on the landing page.
 These illustrations are separate from the imported 3D models listed above.
 
-The menu uses **Lilita One** by Juan Pablo del Peral, obtained from the
+The menu uses **Lilita One**, copyright (c) 2011 **Juan Montoreano**, obtained from the
 [Google Fonts source repository](https://github.com/google/fonts/tree/main/ofl/lilitaone).
 Its SIL Open Font License is preserved in `public/fonts/OFL-LilitaOne.txt`.
 
@@ -92,7 +93,9 @@ The booster collection chirps, double-jump spring wobble and raspberry,
 rocket whistle and landing jingle, and shield pop are original synthesized
 Web Audio effects in `app/game/audio.ts`; they contain no sampled recordings.
 These assets are part of the project's first-party code under the repository's
-existing MIT license. The menu and HUD use the already-installed Lucide icons.
+existing MIT license. The menu and HUD use Lucide icons. The installed Lucide
+copyright and license notices, including the Feather-derived icon notices, are
+preserved in `public/licenses/lucide.txt` and linked from the Credits panel.
 
 Road surfaces, lane markings, merge signs, the start countdown light, warning
 lights, blue-hour sky and light rig, glass-only window glow, procedural

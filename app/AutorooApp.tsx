@@ -21,7 +21,9 @@ import {
   ChevronsUp,
 } from 'lucide-react';
 import { makeBoosterState } from './game/boosters';
+import { CreditsDialog } from './CreditsDialog';
 import { BoosterHud } from './game/BoosterHud';
+import { YeetBurst, useYeetBurst } from './game/YeetBurst';
 import { FIXED_DT, LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
@@ -121,6 +123,11 @@ export function AutorooApp() {
   >(null);
   const [touchDriving, setTouchDriving] = useState(false);
   const [crashAnimating, setCrashAnimating] = useState(false);
+  const {
+    burstId: yeetBurstId,
+    play: playYeetBurst,
+    clear: clearYeetBurst,
+  } = useYeetBurst();
 
   useEffect(() => {
     const query = window.matchMedia(TOUCH_CONTROLS_QUERY);
@@ -171,6 +178,8 @@ export function AutorooApp() {
   const onSnapshot = useCallback(
     (next: RunSnapshot) => {
       const previousPhase = snapshotRef.current.phase;
+      if (next.phase !== 'running' || next.tick < snapshotRef.current.tick)
+        clearYeetBurst();
       if (next.phase !== 'game-over') setCrashAnimating(false);
       if (next.tick < snapshotRef.current.tick || next.phase === 'game-over')
         setDoubleJumpHintUntilTick(null);
@@ -185,30 +194,34 @@ export function AutorooApp() {
       if (next.phase === 'game-over' && next.score > loadBest())
         saveBest(next.score);
     },
-    [clearScoreDelta],
+    [clearScoreDelta, clearYeetBurst],
   );
 
-  const onEvent = useCallback((event: GameEvent) => {
-    if (event.type === 'crash') setCrashAnimating(true);
-    if (event.type === 'pickup' && event.kind === 'boing') {
-      // Consume the actual pickup event: a charge can be spent between HUD
-      // snapshots. Initialize storage lazily, and keep this callback stable.
-      claimDoubleJumpHintRef.current ??= createDoubleJumpHintClaim();
-      if (claimDoubleJumpHintRef.current()) {
-        const tick =
-          gameRef.current?.snapshot()?.tick ?? snapshotRef.current.tick;
-        setDoubleJumpHintUntilTick(tick + Math.round(3.5 / FIXED_DT));
+  const onEvent = useCallback(
+    (event: GameEvent) => {
+      if (event.type === 'rocket-launch') playYeetBurst();
+      if (event.type === 'crash') setCrashAnimating(true);
+      if (event.type === 'pickup' && event.kind === 'boing') {
+        // Consume the actual pickup event: a charge can be spent between HUD
+        // snapshots. Initialize storage lazily, and keep this callback stable.
+        claimDoubleJumpHintRef.current ??= createDoubleJumpHintClaim();
+        if (claimDoubleJumpHintRef.current()) {
+          const tick =
+            gameRef.current?.snapshot()?.tick ?? snapshotRef.current.tick;
+          setDoubleJumpHintUntilTick(tick + Math.round(3.5 / FIXED_DT));
+        }
       }
-    }
-    if (event.type !== 'bonus') return;
-    setScoreDelta((current) => current + event.points);
-    if (scoreDeltaTimerRef.current !== null)
-      window.clearTimeout(scoreDeltaTimerRef.current);
-    scoreDeltaTimerRef.current = window.setTimeout(() => {
-      scoreDeltaTimerRef.current = null;
-      setScoreDelta(0);
-    }, 900);
-  }, []);
+      if (event.type !== 'bonus') return;
+      setScoreDelta((current) => current + event.points);
+      if (scoreDeltaTimerRef.current !== null)
+        window.clearTimeout(scoreDeltaTimerRef.current);
+      scoreDeltaTimerRef.current = window.setTimeout(() => {
+        scoreDeltaTimerRef.current = null;
+        setScoreDelta(0);
+      }, 900);
+    },
+    [playYeetBurst],
+  );
 
   const onReady = useCallback(() => setSceneReady(true), []);
   const onCrashAnimationComplete = useCallback(
@@ -369,6 +382,8 @@ export function AutorooApp() {
         onCrashAnimationComplete={onCrashAnimationComplete}
       />
 
+      {isPlaying && <YeetBurst burstId={yeetBurstId} />}
+
       {!isOnStartScreen && (
         <>
           <div className="hud-top" aria-label="Game status">
@@ -414,6 +429,7 @@ export function AutorooApp() {
           </div>
 
           {isPlaying &&
+            yeetBurstId === 0 &&
             doubleJumpHintUntilTick !== null &&
             snapshot.tick < doubleJumpHintUntilTick && (
               <output className="booster-notice" aria-live="polite">
@@ -467,19 +483,22 @@ export function AutorooApp() {
               </div>
             </div>
 
-            <Button
-              className="start-sound-button"
-              variant="ghost"
-              size="icon"
-              onClick={toggleMuted}
-              aria-label={muted ? 'Unmute sound' : 'Mute sound'}
-            >
-              {muted ? (
-                <VolumeX aria-hidden="true" />
-              ) : (
-                <Volume2 aria-hidden="true" />
-              )}
-            </Button>
+            <div className="start-utilities">
+              <CreditsDialog />
+              <Button
+                className="start-utility-button start-sound-button"
+                variant="ghost"
+                size="icon"
+                onClick={toggleMuted}
+                aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+              >
+                {muted ? (
+                  <VolumeX aria-hidden="true" />
+                ) : (
+                  <Volume2 aria-hidden="true" />
+                )}
+              </Button>
+            </div>
 
             <h1 id="autoroo-title" className="sr-only">
               Autoroo

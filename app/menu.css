@@ -206,13 +206,20 @@
   font-variant-numeric: tabular-nums;
 }
 
-.start-sound-button {
+.start-utilities {
+  --menu-utility-size: clamp(46px, 4vw, 68px);
   position: absolute;
   z-index: 5;
-  top: clamp(20px, 3vh, 36px);
-  right: clamp(20px, 2vw, 40px);
-  width: clamp(46px, 4vw, 68px);
-  height: clamp(46px, 4vw, 68px);
+  top: max(clamp(20px, 3vh, 36px), env(safe-area-inset-top));
+  right: max(clamp(20px, 2vw, 40px), env(safe-area-inset-right));
+  display: flex;
+  align-items: center;
+  gap: clamp(8px, 0.8vw, 14px);
+}
+.start-utility-button {
+  width: var(--menu-utility-size);
+  height: var(--menu-utility-size);
+  padding: 0;
   border: 2px solid rgb(199 177 242 / 42%) !important;
   border-radius: 50% !important;
   background: linear-gradient(150deg, #715092, #291558) !important;
@@ -221,16 +228,23 @@
     0 5px 0 #1c1248;
   color: var(--menu-cream) !important;
 }
-.start-sound-button svg {
+.start-utility-button svg {
   width: 56%;
   height: 56%;
 }
-.start-sound-button:hover {
+.start-credits-button svg {
+  width: 50%;
+  height: 50%;
+}
+.start-utility-button:hover {
   filter: brightness(1.2);
 }
-.start-sound-button:focus-visible {
+.start-utility-button:focus-visible {
   outline: 3px solid var(--menu-cream);
   outline-offset: 4px;
+}
+.start-utility-button:active {
+  transform: translateY(2px);
 }
 
 .start-controls {
@@ -365,11 +379,11 @@
   .start-best strong {
     font-size: 26px;
   }
-  .start-sound-button {
-    top: 22px;
-    right: 20px;
-    width: 46px;
-    height: 46px;
+  .start-utilities {
+    --menu-utility-size: 46px;
+    top: max(22px, env(safe-area-inset-top));
+    right: max(20px, env(safe-area-inset-right));
+    gap: 8px;
   }
   .start-tagline {
     top: 33%;
@@ -457,6 +471,19 @@
 }
 
 @media (max-width: 350px) and (max-aspect-ratio: 4/5) {
+  .start-best {
+    padding-inline: 9px;
+  }
+  .start-best strong {
+    font-size: 22px;
+  }
+  .start-best-score {
+    gap: 5px;
+  }
+  .start-best-score svg {
+    width: 12px;
+    height: 12px;
+  }
   .start-control {
     font-size: 12px;
     gap: 5px;

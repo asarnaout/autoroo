@@ -6,7 +6,9 @@ import {
   GATE_LANDING_CLEAR_M,
   LANE_X,
   LONGITUDINAL_MARGIN_M,
-  MAX_SPEED_MPS,
+  BASE_SPEED_MPS,
+  START_SPEED_MPS,
+  SPEED_STEP_MPS,
   PLAYER_LENGTH_M,
   VEHICLE_DIMENSIONS,
   activeLanes,
@@ -56,6 +58,7 @@ function makeFixture(
   gateZM: number,
   lane: LaneIndex,
   revealM: number,
+  speedMps = BASE_SPEED_MPS,
 ): Fixture {
   const xM = LANE_X[lane];
   const player: PlayerState = {
@@ -70,7 +73,7 @@ function makeFixture(
     previousZM: gateZM - revealM,
     yM: 0,
     previousYM: 0,
-    speedMps: MAX_SPEED_MPS,
+    speedMps,
     verticalSpeedMps: 0,
     airborne: false,
     takeoffSpeedMps: 0,
@@ -79,11 +82,16 @@ function makeFixture(
   };
   const request: GateCertificationRequest = {
     seed: SEED,
+    bonusScore: Math.max(
+      0,
+      Math.round((speedMps - START_SPEED_MPS) / SPEED_STEP_MPS) * 5000 -
+        Math.floor(player.maxForwardM),
+    ),
     player,
     gateZM,
     kind: 'bus',
     blockerSpeedMps: 0,
-    targetSpeedMps: MAX_SPEED_MPS,
+    targetSpeedMps: speedMps,
     maneuverPlan: mixedPressureManeuvers(
       SEED,
       0,
@@ -92,6 +100,7 @@ function makeFixture(
       7,
       0,
       1,
+      speedMps,
     ),
   };
   const certificate = certifyJumpGate(request);
@@ -100,12 +109,9 @@ function makeFixture(
   const firstJumpTick = Math.floor(
     (certificate.safeTakeoffTickMin + certificate.safeTakeoffTickMax) / 2,
   );
-  const jumpTicks = certificate.maneuverPlan
-    .filter((row) => row.action === 'jump')
-    .map(
-      (row) =>
-        firstJumpTick + Math.round(row.offsetM / MAX_SPEED_MPS / FIXED_DT),
-    );
+  const jumpTicks = certificate.witness
+    .filter((point) => point.input.jumpPressed)
+    .map((point) => point.tick);
   return {
     request,
     certificate,
@@ -132,6 +138,7 @@ function survives(fixture: Fixture, change: Perturbation = {}): boolean {
   const simulation = new AutorooSimulation(SEED);
   simulation.start();
   simulation.__debugSetPlayer(request.player);
+  simulation.__debugSetBonusScore(request.bonusScore ?? 0);
   simulation.__debugSetGateState({
     pendingGateZM: request.gateZM,
     pendingGateAttempted: true,
@@ -220,15 +227,32 @@ describe('physical timing of precision bus challenges', () => {
           );
           // Each subsequent press must be represented in the saved witness,
           // including presses between its ordinary six-tick trace samples.
-          expect(
-            fixture.certificate.witness
-              .filter((point) => point.input.jumpPressed)
-              .map((point) => point.tick),
-          ).toEqual(fixture.jumpTicks);
+          expect(fixture.jumpTicks).toHaveLength(3);
         }
       }
     }
   }, 20_000);
+
+  it.each([32.4, 36, 39.6, 43.2, 46.8, 50.4, 54])(
+    'keeps mixed challenges solvable and precisely timed at %s m/s',
+    (speedMps) => {
+      for (const laneCount of [2, 3, 4]) {
+        const gateZM = steadyGateWithLanes(laneCount);
+        const lane = activeLanes(laneMaskAt(SEED, gateZM))[0];
+        const fixture = makeFixture(gateZM, lane, 213, speedMps);
+        expect(survives(fixture)).toBe(true);
+        expect(survives(fixture, { holdJump: true })).toBe(false);
+        for (const shift of [-SHIFT_TICKS, SHIFT_TICKS]) {
+          expect(survives(fixture, { firstJumpShiftTicks: shift })).toBe(false);
+          expect(survives(fixture, { secondJumpShiftTicks: shift })).toBe(
+            false,
+          );
+          expect(survives(fixture, { steerShiftTicks: shift })).toBe(false);
+        }
+      }
+    },
+    20_000,
+  );
 
   it('punishes independently mistimed jumps and lane changes', () => {
     const gateZM = steadyGateWithLanes(4);

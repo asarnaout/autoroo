@@ -20,7 +20,13 @@ export const RENDER_POOL_LIMITS = Object.freeze({
 export const TRAFFIC_RENDER_AHEAD_M = 285;
 export const TRAFFIC_PREGEN_AHEAD_M = 305;
 
-export const MAX_SPEED_MPS = 36;
+export const BASE_SPEED_MPS = 36;
+export const START_SPEED_MPS = BASE_SPEED_MPS * 0.9;
+export const MAX_SPEED_MPS = BASE_SPEED_MPS * 1.5;
+export const SPEED_SCORE_STEP = 5000;
+export const SPEED_STEP_MPS = BASE_SPEED_MPS * 0.1;
+// Each milestone eases in over three seconds of driving.
+export const SPEED_RAMP_MPS2 = SPEED_STEP_MPS / 3;
 export const ACCELERATION_MPS2 = 8;
 export const PLAYER_WIDTH_M = 1.9;
 export const LATERAL_COLLISION_MARGIN_M = 0.1;
@@ -40,12 +46,14 @@ export const DIFFICULTY_DISTANCE_SCALE_M = 700;
 export const PLAYER_LENGTH_M = 3.6;
 export const LONGITUDINAL_MARGIN_M = 0.25;
 export const VERTICAL_CLEARANCE_M = 0.15;
-export const TIMING_MARGIN_TICKS = 2;
+// Retain a full 100 ms certified window at the 90% starting speed.
+// Every advertised input tick still passes the real swept collision replay.
+export const TIMING_MARGIN_TICKS = 1;
 export const MIN_SPACE_WINDOW_S = 0.1;
 // Compact challenges leave only a short approach; existing traffic is replayed
 // as part of certification instead of clearing a long stretch of road.
 export const GATE_APPROACH_CLEAR_M = 50;
-export const GATE_SEQUENCE_FORWARD_M = 132;
+export const GATE_SEQUENCE_FORWARD_M = 145;
 export const GATE_MIN_SPACING_M = 470;
 export const GATE_LANDING_CLEAR_M = 8;
 export const GATE_WITNESS_LIMIT_S = 20;

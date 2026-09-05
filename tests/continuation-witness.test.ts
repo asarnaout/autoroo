@@ -1,9 +1,5 @@
 import { expect, it } from 'vitest';
-import {
-  FIXED_DT,
-  LANE_COMMAND_INTERVAL_TICKS,
-  MAX_SPEED_MPS,
-} from '../app/game/constants';
+import { LANE_COMMAND_INTERVAL_TICKS } from '../app/game/constants';
 import { AutorooSimulation } from '../app/game/simulation';
 import { certificateBotInput } from './bot-driver';
 
@@ -22,18 +18,9 @@ it('retains off-cadence jump inputs in continuation ground-route witnesses', () 
     const snapshot = simulation.snapshot();
     const gate = snapshot.activeCertificate;
     if (gate) {
-      const firstJumpTick = Math.floor(
-        (gate.safeTakeoffTickMin + gate.safeTakeoffTickMax) / 2,
-      );
-      const closingSpeedMps =
-        MAX_SPEED_MPS - gate.blockerTrajectories[0].speedMps;
-      const jumpTicks = gate.maneuverPlan
-        .filter((row) => row.action === 'jump')
-        .map(
-          (row) =>
-            firstJumpTick +
-            Math.round(row.offsetM / closingSpeedMps / FIXED_DT),
-        );
+      const jumpTicks = gate.witness
+        .filter((point) => point.input.jumpPressed)
+        .map((point) => point.tick);
       for (const ground of simulation.getGroundCertificates()) {
         if (
           seenCertificates.has(ground.id) ||

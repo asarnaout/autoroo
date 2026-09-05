@@ -73,10 +73,10 @@ describe('keyboard input buffering', () => {
     expect(isGameKey('ArrowDown')).toBe(false);
     for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
     const speedWhileDownHeld = run.snapshot().player.speedMps;
-    expect(speedWhileDownHeld).toBeGreaterThan(driving.speedMps);
+    expect(speedWhileDownHeld).toBe(driving.speedMps);
     input.keyUp('ArrowDown');
     for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
-    expect(run.snapshot().player.speedMps).toBeGreaterThan(speedWhileDownHeld);
+    expect(run.snapshot().player.speedMps).toBe(speedWhileDownHeld);
 
     input.keyDown('ArrowRight');
     input.keyDown('Space');

@@ -15,7 +15,9 @@ import {
   LANE_X,
   LATERAL_COLLISION_MARGIN_M,
   LONGITUDINAL_MARGIN_M,
+  BASE_SPEED_MPS,
   MAX_SPEED_MPS,
+  START_SPEED_MPS,
   MIN_SPACE_WINDOW_S,
   MODULE_LENGTH_M,
   PLAYER_LENGTH_M,
@@ -63,6 +65,7 @@ import {
   ordinarySpeedMps,
   roadModuleForDistance,
 } from './generator';
+import { drivingAccelerationMps2, speedLimitForScore } from './speed';
 import { hashParts, hashUnit, stableHash } from './random';
 import {
   BOOSTER_POOL_SIZE,
@@ -80,7 +83,11 @@ import {
 // Gate rows and ordinary encounters are committed while still behind the fog
 // boundary. Even the last spatial retry stays outside the 285 m render band.
 const GATE_REVEAL_M = 340;
-const GATE_RETRY_STEP_M = 5;
+// The opening's shorter, slower five-row chain keeps its original placement.
+const INITIAL_GATE_FORWARD_M = 132;
+// Vary retry input phases at the new speed tiers; 5 m can repeatedly land
+// on the same six-tick steering cadence near 50.4 m/s. All retries stay in fog.
+const GATE_RETRY_STEP_M = 4.5;
 const GATE_DRAFT_STAGES = 8;
 const GATE_APPROACH_TARGET_FLAG = 1 << 2;
 const POST_GATE_TRAFFIC_START_M = GATE_SEQUENCE_FORWARD_M + 4;
@@ -259,9 +266,10 @@ export function jumpChainOffsetsM(
   rowCount: number,
   blockerSpeedMps: number,
   spacingScale = 1,
+  playerSpeedMps = BASE_SPEED_MPS,
 ): readonly number[] {
   const count = Math.max(1, Math.min(MAX_GATE_ROWS, Math.floor(rowCount)));
-  const relativeSpeedMps = Math.max(0, MAX_SPEED_MPS - blockerSpeedMps);
+  const relativeSpeedMps = Math.max(0, playerSpeedMps - blockerSpeedMps);
   const hopCycleS = Math.ceil(JUMP_FLIGHT_SECONDS / FIXED_DT) * FIXED_DT;
   const spacingM = relativeSpeedMps * hopCycleS * spacingScale;
   return Object.freeze(
@@ -281,10 +289,13 @@ export function mixedPressureManeuvers(
   rowCount: number,
   blockerSpeedMps: number,
   difficulty = 1,
+  playerSpeedMps = BASE_SPEED_MPS,
 ): readonly ChallengeManeuver[] {
   const lanes = activeLanes(gateMask);
   const count = Math.max(3, Math.min(7, Math.floor(rowCount)));
-  const relativeSpeedMps = Math.max(0, MAX_SPEED_MPS - blockerSpeedMps);
+  // Keep high-speed chains compact while retaining enough room for lane rolls.
+  const spacingSpeedMps = Math.min(playerSpeedMps, BASE_SPEED_MPS * 1.125);
+  const relativeSpeedMps = Math.max(0, spacingSpeedMps - blockerSpeedMps);
   const pressure = Math.max(0, Math.min(1, difficulty));
   const jumpIntervalTicks = Math.round(78 - 12 * pressure);
   const dodgeDelayTicks = Math.round(36 - 3 * pressure);
@@ -338,23 +349,13 @@ export function mixedPressureManeuvers(
   return Object.freeze(plan);
 }
 
-/** Inputs for the certified route, expressed in the caller's tick clock. */
-export function gateJumpPressedAt(
-  plan: readonly Pick<ChallengeManeuver, 'offsetM' | 'action'>[],
-  blockerSpeedMps: number,
+/** Reuse the exact presses proved through any speed milestone in this gate. */
+export function certificateJumpPressedAt(
+  certificate: ChallengeCertificate,
   tick: number,
-  firstJumpTick: number,
 ): boolean {
-  // Legacy all-jump chains still certify consecutive held hops. Mixed gates
-  // instead require a fresh, precisely scheduled takeoff at every jump wall.
-  if (!plan.some((row) => row.action === 'dodge')) return tick >= firstJumpTick;
-  const closingSpeedMps = MAX_SPEED_MPS - blockerSpeedMps;
-  if (closingSpeedMps <= 0) return false;
-  return plan.some(
-    (row) =>
-      row.action === 'jump' &&
-      tick ===
-        firstJumpTick + Math.round(row.offsetM / closingSpeedMps / FIXED_DT),
+  return certificate.witness.some(
+    (point) => point.tick === tick && point.input.jumpPressed,
   );
 }
 
@@ -465,15 +466,19 @@ export function computeGateWindow(
 export function advancePlayerPhysics(
   player: PlayerState,
   input: InputFrame,
+  speedLimitMps = BASE_SPEED_MPS,
+  accelerationMps2 = ACCELERATION_MPS2,
 ): void {
   player.previousZM = player.absoluteZM;
   player.previousYM = player.yM;
 
+  // Accrue only the acceleration unlocked on this tick. Forward flight still
+  // uses takeoffSpeedMps so a milestone cannot distort an already-timed jump.
+  player.speedMps = Math.min(
+    speedLimitMps,
+    player.speedMps + accelerationMps2 * FIXED_DT,
+  );
   if (!player.airborne) {
-    player.speedMps = Math.min(
-      MAX_SPEED_MPS,
-      player.speedMps + ACCELERATION_MPS2 * FIXED_DT,
-    );
     if (input.jumpPressed) {
       player.airborne = true;
       player.takeoffSpeedMps = player.speedMps;
@@ -500,13 +505,6 @@ export function advancePlayerPhysics(
       player.yM = 0;
       player.previousYM = Math.max(0, player.previousYM);
       player.verticalSpeedMps = 0;
-      // Keep each flight's forward speed fixed, then apply the acceleration
-      // earned in the air so holding jump cannot keep the run at a crawl.
-      player.speedMps = Math.min(
-        MAX_SPEED_MPS,
-        player.takeoffSpeedMps +
-          ACCELERATION_MPS2 * Math.max(0, player.jumpElapsedS - FIXED_DT),
-      );
     }
   }
   player.maxForwardM = Math.max(player.maxForwardM, player.absoluteZM);
@@ -608,10 +606,10 @@ function makePlayer(): PlayerState {
     previousZM: 0,
     yM: 0,
     previousYM: 0,
-    speedMps: 0,
+    speedMps: START_SPEED_MPS,
     verticalSpeedMps: 0,
     airborne: false,
-    takeoffSpeedMps: 0,
+    takeoffSpeedMps: START_SPEED_MPS,
     jumpElapsedS: 0,
     maxForwardM: 0,
   };
@@ -938,16 +936,105 @@ function enforceActiveLaneTarget(player: PlayerState, mask: number): void {
   beginLaneChange(player, nearestActiveLane(mask, player.lane));
 }
 
+function resolveWorldScoring(
+  world: MutableWorldState,
+  onBonus?: (points: number, label: string) => void,
+): void {
+  const centeredForWholeTick =
+    isPlayerCenteredInLane(world.player) &&
+    Math.abs(world.player.previousXM - world.player.xM) < 1e-9;
+  for (const vehicle of world.traffic) {
+    const halfExtent =
+      PLAYER_LENGTH_M / 2 + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
+    const longitudinalOverlap = sweptOverlapInterval(
+      world.player.previousZM,
+      world.player.absoluteZM,
+      vehicle.previousZM,
+      vehicle.absoluteZM,
+      halfExtent,
+    );
+    const footprintOverlap = sweptVehicleOverlapInterval(world.player, vehicle);
+    if (footprintOverlap) {
+      if (world.player.airborne || world.player.previousYM > 0)
+        vehicle.airborneOverlap = true;
+    }
+    if (
+      longitudinalOverlap &&
+      !world.player.airborne &&
+      world.player.previousYM === 0 &&
+      centeredForWholeTick &&
+      Math.abs(world.player.lane - vehicle.lane) === 1
+    ) {
+      vehicle.closePassOverlap = true;
+    }
+  }
+
+  // Resolve simultaneous bonuses in canonical ID order. Traffic storage is
+  // deliberately not part of the simulation contract, so it cannot affect
+  // event ordering or the last visible bonus label.
+  let previousAwardedId: string | null = null;
+  while (true) {
+    let next: TrafficVehicle | null = null;
+    for (const vehicle of world.traffic) {
+      const fullyPassed =
+        world.player.absoluteZM - vehicle.absoluteZM >
+        PLAYER_LENGTH_M / 2 + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
+      const hasBonus = vehicle.airborneOverlap || vehicle.closePassOverlap;
+      if (
+        !fullyPassed ||
+        !hasBonus ||
+        vehicle.bonusAwarded ||
+        (previousAwardedId !== null && vehicle.id <= previousAwardedId)
+      ) {
+        continue;
+      }
+      if (next === null || vehicle.id < next.id) next = vehicle;
+    }
+    if (next === null) break;
+    const points = next.airborneOverlap
+      ? next.kind === 'bus'
+        ? 250
+        : 100
+      : 25;
+    const label = next.airborneOverlap
+      ? next.kind === 'bus'
+        ? 'BUS BOUNCE!'
+        : 'CAR HOP!'
+      : 'TOO CLOSE!';
+    next.bonusAwarded = true;
+    world.bonusScore += points;
+    onBonus?.(points, label);
+    previousAwardedId = next.id;
+  }
+}
+
 /** Shared player/traffic transition used by live play and witnesses. */
 function stepWorld(
   world: MutableWorldState,
   input: InputFrame,
   boosts?: BoosterState,
+  onBonus?: (points: number, label: string) => void,
 ): number {
   applyInputLane(world.player, input, world.seed);
   const wasAirborne = world.player.airborne;
-  if (!boosts || !advanceBoosterFlight(world.player, boosts)) {
-    advancePlayerPhysics(world.player, input);
+  const speedLimit = speedLimitForScore(
+    Math.floor(world.player.maxForwardM) + world.bonusScore,
+  );
+  if (
+    !boosts ||
+    !advanceBoosterFlight(
+      world.player,
+      boosts,
+      speedLimit,
+      drivingAccelerationMps2(world.player.speedMps),
+    )
+  ) {
+    advancePlayerPhysics(
+      world.player,
+      input,
+      speedLimit,
+      drivingAccelerationMps2(world.player.speedMps),
+    );
   }
   let outcome = !wasAirborne && world.player.airborne ? WORLD_JUMPED : 0;
 
@@ -973,6 +1060,7 @@ function stepWorld(
       return outcome;
     }
   }
+  resolveWorldScoring(world, onBonus);
   world.tickNumber += 1;
   return outcome;
 }
@@ -1479,7 +1567,14 @@ function plausibleTakeoffTicks(
       isPlayerCenteredInLane(lanePreview, targetLane)
     ) {
       const preview = clonePlayer(lanePreview);
-      advancePlayerPhysics(preview, { ...input, jumpPressed: true });
+      advancePlayerPhysics(
+        preview,
+        { ...input, jumpPressed: true },
+        speedLimitForScore(
+          Math.floor(world.player.maxForwardM) + world.bonusScore,
+        ),
+        drivingAccelerationMps2(world.player.speedMps),
+      );
       const blockerZM =
         candidate.gateZM + candidate.blockerSpeedMps * localTick * FIXED_DT;
       const math = computeGateWindow(
@@ -1579,6 +1674,8 @@ function continueGateWitness(
 ): WitnessResult {
   const witness: WitnessTracePoint[] = [];
   let minimumVerticalClearanceM = Number.POSITIVE_INFINITY;
+  let jumpLeadTimeS = 0;
+  const mixed = candidate.maneuverPlan.some((row) => row.action === 'dodge');
 
   for (
     let localTick = startLocalTick;
@@ -1607,16 +1704,50 @@ function continueGateWitness(
       false,
       continuingApproach,
     );
+    const prospectiveSpeedMps = Math.min(
+      speedLimitForScore(
+        Math.floor(world.player.maxForwardM) + world.bonusScore,
+      ),
+      world.player.speedMps +
+        drivingAccelerationMps2(world.player.speedMps) * FIXED_DT,
+    );
+    const closingSpeedMps = prospectiveSpeedMps - candidate.blockerSpeedMps;
+    if (localTick === jumpTick) {
+      jumpLeadTimeS =
+        (candidate.gateZM +
+          candidate.blockerSpeedMps * localTick * FIXED_DT -
+          world.player.absoluteZM) /
+        closingSpeedMps;
+    }
+    // Keep the first certified press's approach phase for each later wall.
+    // A score milestone can change speed between jumps; a fixed tick interval
+    // would then certify inputs that arrive early or late in live play.
+    const nextJump =
+      mixed && localTick > jumpTick && !world.player.airborne
+        ? candidate.maneuverPlan.find(
+            (row) =>
+              row.action === 'jump' &&
+              row.offsetM > 0 &&
+              candidate.gateZM +
+                row.offsetM +
+                candidate.blockerSpeedMps * localTick * FIXED_DT >
+                world.player.absoluteZM,
+          )
+        : undefined;
+    const jumpDue =
+      nextJump !== undefined &&
+      closingSpeedMps > 0 &&
+      (candidate.gateZM +
+        nextJump.offsetM +
+        candidate.blockerSpeedMps * localTick * FIXED_DT -
+        world.player.absoluteZM) /
+        closingSpeedMps <=
+        jumpLeadTimeS + FIXED_DT / 2;
     const jumpPressed =
       control !== 'no-jump' &&
-      (control === 'hold-jump'
+      (control === 'hold-jump' || !mixed
         ? localTick >= jumpTick
-        : gateJumpPressedAt(
-            candidate.maneuverPlan,
-            candidate.blockerSpeedMps,
-            localTick,
-            jumpTick,
-          ));
+        : localTick === jumpTick || jumpDue);
     const input: InputFrame = { ...steeringInput, jumpPressed };
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input);
@@ -1753,6 +1884,11 @@ function simulateGroundWitness(
   activeCertificate: ChallengeCertificate | null = null,
   rocketFlight: Readonly<RocketFlight> | null = null,
 ): WitnessResult {
+  const activeJumpTicks = new Set(
+    activeCertificate?.witness
+      .filter((point) => point.input.jumpPressed)
+      .map((point) => point.tick),
+  );
   const world = cloneWorld(revealWorld);
   // Prove the same flight/landing the player will experience, without relying
   // on an optional shield or changing the live rocket timer.
@@ -1816,20 +1952,14 @@ function simulateGroundWitness(
       jumpPressed:
         followingGate &&
         activeCertificate !== null &&
-        gateJumpPressedAt(
-          activeCertificate.maneuverPlan,
-          activeCertificate.blockerTrajectories[0].speedMps,
-          world.tickNumber,
-          Math.floor(
-            (activeCertificate.safeTakeoffTickMin +
-              activeCertificate.safeTakeoffTickMax) /
-              2,
-          ),
-        ),
+        activeJumpTicks.has(world.tickNumber),
     };
     const inputTick = world.tickNumber;
     const outcome = stepWorld(world, input, boosts);
-    if (boosts?.rocket && !world.player.airborne) boosts.rocket = null;
+    if (boosts?.rocket && !world.player.airborne) {
+      boosts.rocket = null;
+      world.bonusScore += ROCKET_BONUS;
+    }
     if (
       localTick % LANE_COMMAND_INTERVAL_TICKS === 0 ||
       laneDelta !== 0 ||
@@ -2077,7 +2207,7 @@ export class AutorooSimulation {
         this.seed,
         firstGateDistance(this.seed),
         360,
-        GATE_SEQUENCE_FORWARD_M,
+        INITIAL_GATE_FORWARD_M,
       ) ?? Number.POSITIVE_INFINITY;
     this.fillAhead();
     this.fillBoosters();
@@ -2147,7 +2277,7 @@ export class AutorooSimulation {
         this.seed,
         firstGateDistance(this.seed),
         360,
-        GATE_SEQUENCE_FORWARD_M,
+        INITIAL_GATE_FORWARD_M,
       ) ?? Number.POSITIVE_INFINITY;
     this.pendingGateAttempted = false;
     this.gateDraftStage = 0;
@@ -2179,7 +2309,6 @@ export class AutorooSimulation {
       this.boosters.doubleJumpUsedThisFlight = true;
       this.boosters.doubleJumpOriginYM = this.player.yM;
       this.boosters.doubleJumpElapsedS = 0;
-      this.boosters.doubleJumpInitialAirTimeS = this.player.jumpElapsedS;
       this.player.verticalSpeedMps = DOUBLE_JUMP_IMPULSE_MPS;
       this.boosterEffect('boing', 0.8);
       this.emitEvent({ type: 'double-jump' });
@@ -2188,7 +2317,12 @@ export class AutorooSimulation {
     const enhancedFlight =
       wasRocketFlying || this.boosters.doubleJumpOriginYM !== null;
     const previousLane = this.player.lane;
-    const outcome = stepWorld(this.world, input, this.boosters);
+    const outcome = stepWorld(
+      this.world,
+      input,
+      this.boosters,
+      this.onPassBonus,
+    );
     if ((outcome & WORLD_JUMPED) !== 0) this.emitEvent({ type: 'jump' });
     if ((outcome & WORLD_CRASHED) !== 0) {
       if (this.boosters.shieldReady) {
@@ -2210,7 +2344,8 @@ export class AutorooSimulation {
     if (this.player.lane !== previousLane)
       this.emitEvent({ type: 'lane-change' });
 
-    this.resolveScoring();
+    if ((outcome & WORLD_CRASHED) !== 0)
+      resolveWorldScoring(this.world, this.onPassBonus);
     // The final swept segment has been collision-checked and any pass bonus
     // finalized before this immutable taper-boundary retirement.
     retireCompletedOrdinaryTrajectories(this.world);
@@ -2318,7 +2453,6 @@ export class AutorooSimulation {
       landingZM,
     };
     this.boosters.doubleJumpOriginYM = null;
-    this.boosters.doubleJumpInitialAirTimeS = 0;
     this.player.airborne = true;
     this.activeCertificate = null;
     this.groundRoutes.length = 0;
@@ -2350,82 +2484,10 @@ export class AutorooSimulation {
     });
   }
 
-  private resolveScoring(): void {
-    const centeredForWholeTick =
-      isPlayerCenteredInLane(this.player) &&
-      Math.abs(this.player.previousXM - this.player.xM) < 1e-9;
-    for (const vehicle of this.traffic) {
-      const halfExtent =
-        PLAYER_LENGTH_M / 2 + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
-      const longitudinalOverlap = sweptOverlapInterval(
-        this.player.previousZM,
-        this.player.absoluteZM,
-        vehicle.previousZM,
-        vehicle.absoluteZM,
-        halfExtent,
-      );
-      const footprintOverlap = sweptVehicleOverlapInterval(
-        this.player,
-        vehicle,
-      );
-      if (footprintOverlap) {
-        if (this.player.airborne || this.player.previousYM > 0)
-          vehicle.airborneOverlap = true;
-      }
-      if (
-        longitudinalOverlap &&
-        !this.player.airborne &&
-        this.player.previousYM === 0 &&
-        centeredForWholeTick &&
-        Math.abs(this.player.lane - vehicle.lane) === 1
-      ) {
-        vehicle.closePassOverlap = true;
-      }
-    }
-
-    // Resolve simultaneous bonuses in canonical ID order. Traffic storage is
-    // deliberately not part of the simulation contract, so it cannot affect
-    // event ordering or the last visible bonus label.
-    let previousAwardedId: string | null = null;
-    while (true) {
-      let next: TrafficVehicle | null = null;
-      for (const vehicle of this.traffic) {
-        const fullyPassed =
-          this.player.absoluteZM - vehicle.absoluteZM >
-          PLAYER_LENGTH_M / 2 + vehicle.lengthM / 2 + LONGITUDINAL_MARGIN_M;
-        const hasBonus = vehicle.airborneOverlap || vehicle.closePassOverlap;
-        if (
-          !fullyPassed ||
-          !hasBonus ||
-          vehicle.bonusAwarded ||
-          (previousAwardedId !== null && vehicle.id <= previousAwardedId)
-        ) {
-          continue;
-        }
-        if (next === null || vehicle.id < next.id) next = vehicle;
-      }
-      if (next === null) break;
-      if (next.airborneOverlap) {
-        const points = next.kind === 'bus' ? 250 : 100;
-        const label = next.kind === 'bus' ? 'BUS BOUNCE!' : 'CAR HOP!';
-        this.awardBonus(next, points, label);
-      } else {
-        this.awardBonus(next, 25, 'TOO CLOSE!');
-      }
-      previousAwardedId = next.id;
-    }
-  }
-
-  private awardBonus(
-    vehicle: TrafficVehicle,
-    points: number,
-    label: string,
-  ): void {
-    vehicle.bonusAwarded = true;
-    this.bonusScore += points;
+  private readonly onPassBonus = (points: number, label: string): void => {
     this.lastBonusLabel = `${label} +${points}`;
     this.emitEvent({ type: 'bonus', label, points });
-  }
+  };
 
   private emitEvent(event: GameEvent): void {
     if (this.events.length >= MAX_PENDING_EVENTS) this.events.shift();
@@ -2594,13 +2656,13 @@ export class AutorooSimulation {
     // The last approach row clears before the ~15 m bus takeoff point.
     // Road topology keeps its separate 50 m steady approach reservation.
     const approachEndM = this.pendingGateZM - 28;
-    const accelerationDelayS =
-      (MAX_SPEED_MPS - this.player.speedMps) ** 2 /
-      (2 * ACCELERATION_MPS2 * MAX_SPEED_MPS);
+    const approachSpeedMps = Math.max(
+      START_SPEED_MPS,
+      Math.min(MAX_SPEED_MPS, this.player.speedMps),
+    );
     const approachArrivalS = Math.max(
       0,
-      (approachEndM - this.player.absoluteZM) / MAX_SPEED_MPS +
-        accelerationDelayS,
+      (approachEndM - this.player.absoluteZM) / approachSpeedMps,
     );
     let remainingFailedDrafts = 4;
     while (this.encounterCursorM < generationEndM) {
@@ -2924,6 +2986,9 @@ export class AutorooSimulation {
     }
     const draftStage = this.gateDraftStage;
     const gateDifficulty = difficultyAt(this.player.maxForwardM);
+    const targetSpeedMps = speedLimitForScore(
+      Math.floor(this.player.maxForwardM) + this.bonusScore,
+    );
     const requestedRows = gateDifficulty >= 0.8 ? 7 : 5;
     const gateMask = laneMaskAt(this.seed, this.pendingGateZM);
     const liveOrdinaryEncounterIds = new Set(
@@ -2963,6 +3028,7 @@ export class AutorooSimulation {
         requestedRows,
         0,
         gateDifficulty,
+        targetSpeedMps,
       );
       const blockerCount = maneuverPlan.reduce(
         (total, maneuver) => total + countLanes(maneuver.blockedLaneMask),
@@ -2980,7 +3046,7 @@ export class AutorooSimulation {
         this.pendingGateZM,
         'bus',
         0,
-        MAX_SPEED_MPS,
+        targetSpeedMps,
         candidateAttempt,
         undefined,
         maneuverPlan,
@@ -3124,6 +3190,11 @@ export class AutorooSimulation {
 
   getGroundCertificates(): readonly ChallengeCertificate[] {
     return this.groundRoutes.map((route) => route.certificate);
+  }
+
+  /** Deterministic harness hook used only by the unit tests. */
+  __debugSetBonusScore(score: number): void {
+    this.bonusScore = score;
   }
 
   /** Deterministic harness hook used only by the unit tests. */

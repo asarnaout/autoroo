@@ -27,8 +27,6 @@ export interface BoosterState {
   protectionS: number;
   doubleJumpOriginYM: number | null;
   doubleJumpElapsedS: number;
-  /** Normal-jump airtime before switching to the custom booster arc. */
-  doubleJumpInitialAirTimeS: number;
   doubleJumpUsedThisFlight: boolean;
   rocket: RocketFlight | null;
   effect: 'boing' | 'rocket' | 'shield-pop' | 'landing' | null;
@@ -55,6 +53,7 @@ export interface PlayerState {
   previousZM: number;
   yM: number;
   previousYM: number;
+  /** Cruising speed; an airborne arc keeps its separate takeoff speed. */
   speedMps: number;
   verticalSpeedMps: number;
   airborne: boolean;

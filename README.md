@@ -12,6 +12,10 @@ object pools, while React owns the HUD and menus.
   lanes and hold **JUMP** to keep hopping. Release and tap JUMP again to use a
   collected midair jump. Pause and sound
   controls stay visible in both orientations. Desktop keyboard controls also work.
+- Runs start at 90% of the original 36 m/s top speed. Every 5,000 total score
+  unlocks another 10 percentage points, eased in over about three seconds,
+  reaching the 54 m/s cap at 30,000 points. Bonus points count toward milestones;
+  pause freezes the ramp and restart resets it. No speed notifications appear.
 - Left and Right trigger a quick
   lateral barrel roll into the next active lane, including in the air. The
   physical lane sweep remains collidable, so an evasive move can be too late.
@@ -44,9 +48,9 @@ object pools, while React owns the HUD and menus.
   increasing the closing speed. Late rows leave one adjacent escape lane.
 - Mandatory bus challenges begin around 400–500 m and recur throughout the run.
   Early sequences mix three timed jumps with two dodges; later sequences put
-  two consecutive dodges between each jump, with rows at most 19.8 m apart.
-  Each dodge leaves exactly one lane open. Bus jumps have an actual timing
-  window around 167 ms; release and time each jump instead of holding Jump.
+  two consecutive dodges between each jump, with rows at most 22.3 m apart.
+  Each dodge leaves exactly one lane open. Bus sequences are checked at the
+  current speed tier; release and time each jump instead of holding Jump.
   Stationary continuation traffic follows the final landing without a long
   empty exit.
 - Every revealed ordinary row has a replayed ground route. Mandatory jump gates

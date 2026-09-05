@@ -13,11 +13,11 @@ import {
 } from '../app/game/boosters';
 import {
   EMPTY_INPUT,
-  ACCELERATION_MPS2,
+  START_SPEED_MPS,
   FIXED_DT,
   LANE_X,
   LANE_CHANGE_TICKS,
-  MAX_SPEED_MPS,
+  BASE_SPEED_MPS,
   TRAFFIC_RENDER_AHEAD_M,
   activeLanes,
   hasLane,
@@ -192,7 +192,7 @@ describe('collectible generation and collection', () => {
     (kind) => {
       for (const doubleJump of [false, true]) {
         const run = emptyRun();
-        run.__debugSetPlayer({ speedMps: MAX_SPEED_MPS });
+        run.__debugSetPlayer({ speedMps: BASE_SPEED_MPS });
         clearTick(run, tap);
         if (doubleJump) {
           run.__debugSetBoosters({ doubleJumpReady: true });
@@ -202,7 +202,7 @@ describe('collectible generation and collection', () => {
         run.drainEvents();
         const item = pickup(
           kind,
-          run.renderPlayer.absoluteZM + MAX_SPEED_MPS * FIXED_DT,
+          run.renderPlayer.absoluteZM + BASE_SPEED_MPS * FIXED_DT,
           kind === 'boing' ? 1.2 : kind === 'shield' ? 3.4 : 4.8,
         );
         expect(run.renderPlayer.yM + 0.7).toBeGreaterThan(item.yM);
@@ -260,7 +260,7 @@ describe('collectible generation and collection', () => {
         absoluteZM: distance,
         previousZM: distance,
         maxForwardM: distance,
-        speedMps: MAX_SPEED_MPS,
+        speedMps: BASE_SPEED_MPS,
       });
       clearTick(run);
       expect(run.renderPickups.length).toBeLessThanOrEqual(BOOSTER_POOL_SIZE);
@@ -315,10 +315,7 @@ describe('Boing! double jump', () => {
       }
       expect(ticks * FIXED_DT).toBeGreaterThan(1.6);
       expect(run.renderPlayer.yM).toBe(0);
-      expect(run.renderPlayer.speedMps).toBeCloseTo(
-        Math.min(MAX_SPEED_MPS, run.renderTick * FIXED_DT * ACCELERATION_MPS2),
-        8,
-      );
+      expect(run.renderPlayer.speedMps).toBeCloseTo(START_SPEED_MPS, 8);
       expect(run.phaseName).toBe('running');
     },
   );
@@ -466,7 +463,7 @@ describe('Yeet Rocket', () => {
       expect(after.player).toMatchObject({
         airborne: false,
         yM: 0,
-        speedMps: MAX_SPEED_MPS,
+        speedMps: START_SPEED_MPS,
       });
       expect(hasLane(after.laneMask, after.player.lane)).toBe(true);
       expect(after.boosters).toMatchObject({

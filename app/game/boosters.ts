@@ -1,7 +1,7 @@
 import {
   LANE_X,
   FIXED_DT,
-  MAX_SPEED_MPS,
+  BASE_SPEED_MPS,
   ACCELERATION_MPS2,
   activeLanes,
 } from './constants';
@@ -60,7 +60,6 @@ export function makeBoosterState(): BoosterState {
     protectionS: 0,
     doubleJumpOriginYM: null,
     doubleJumpElapsedS: 0,
-    doubleJumpInitialAirTimeS: 0,
     doubleJumpUsedThisFlight: false,
     rocket: null,
     effect: null,
@@ -134,6 +133,8 @@ export function collectsBooster(
 export function advanceBoosterFlight(
   player: PlayerState,
   boosts: BoosterState,
+  speedLimitMps = BASE_SPEED_MPS,
+  accelerationMps2 = ACCELERATION_MPS2,
 ): boolean {
   const rocket = boosts.rocket;
   if (!rocket && boosts.doubleJumpOriginYM === null) return false;
@@ -156,10 +157,14 @@ export function advanceBoosterFlight(
       player.airborne = false;
       player.yM = 0;
       player.verticalSpeedMps = 0;
-      player.speedMps = MAX_SPEED_MPS;
-      player.takeoffSpeedMps = MAX_SPEED_MPS;
+      player.speedMps = speedLimitMps;
+      player.takeoffSpeedMps = speedLimitMps;
     }
   } else {
+    player.speedMps = Math.min(
+      speedLimitMps,
+      player.speedMps + accelerationMps2 * FIXED_DT,
+    );
     boosts.doubleJumpElapsedS += FIXED_DT;
     const t = boosts.doubleJumpElapsedS;
     player.absoluteZM += player.takeoffSpeedMps * FIXED_DT;
@@ -174,19 +179,7 @@ export function advanceBoosterFlight(
     if (player.yM === 0) {
       player.airborne = false;
       player.verticalSpeedMps = 0;
-      player.speedMps = Math.min(
-        MAX_SPEED_MPS,
-        player.takeoffSpeedMps +
-          ACCELERATION_MPS2 *
-            Math.max(
-              0,
-              boosts.doubleJumpInitialAirTimeS +
-                boosts.doubleJumpElapsedS -
-                FIXED_DT,
-            ),
-      );
       boosts.doubleJumpOriginYM = null;
-      boosts.doubleJumpInitialAirTimeS = 0;
     }
   }
   player.maxForwardM = Math.max(player.maxForwardM, player.absoluteZM);

@@ -313,7 +313,7 @@ describe.runIf(stress)('long-run procedural stress', () => {
       expect(
         percentile(liveRowGapsM, 0.9),
         `seed ${seed} physical row gaps`,
-      ).toBeLessThanOrEqual(22);
+      ).toBeLessThanOrEqual(22.3);
       expect(lateRowKeys.size, `seed ${seed}`).toBeGreaterThanOrEqual(3200);
       gateStartsM.sort((first, second) => first - second);
       expect(

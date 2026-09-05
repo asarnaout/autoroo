@@ -11,7 +11,10 @@ import {
   PLAYER_LENGTH_M,
   VEHICLE_DIMENSIONS,
 } from '../app/game/constants';
-import { AutorooSimulation, gateJumpPressedAt } from '../app/game/simulation';
+import {
+  AutorooSimulation,
+  certificateJumpPressedAt,
+} from '../app/game/simulation';
 
 interface ManeuverPlanRow {
   readonly offsetM: number;
@@ -133,12 +136,7 @@ export function certificateBotInput(
     }
     return {
       laneDelta,
-      jumpPressed: gateJumpPressedAt(
-        jump.maneuverPlan,
-        jump.blockerTrajectories[0].speedMps,
-        snapshot.tick,
-        Math.floor((jump.safeTakeoffTickMin + jump.safeTakeoffTickMax) / 2),
-      ),
+      jumpPressed: certificateJumpPressedAt(jump, snapshot.tick),
     };
   }
 

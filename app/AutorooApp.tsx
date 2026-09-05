@@ -403,64 +403,34 @@ export function AutorooApp() {
                 <Pause />
               </Button>
             )}
+            <ul className="booster-hud" aria-label="Booster inventory">
+              <li
+                className="booster-slot boing-slot"
+                data-ready={snapshot.boosters.doubleJumpReady}
+              >
+                <ChevronsUp aria-hidden="true" />
+                <span className="sr-only">
+                  {snapshot.boosters.doubleJumpReady
+                    ? 'Double jump ready'
+                    : 'No double jump'}
+                </span>
+              </li>
+              <li
+                className="booster-slot shield-slot"
+                data-ready={snapshot.boosters.shieldReady}
+              >
+                <Shield aria-hidden="true" />
+                <span className="sr-only">
+                  {snapshot.boosters.shieldReady ? 'Shield ready' : 'No shield'}
+                </span>
+              </li>
+            </ul>
             <div className="score-chip best-chip">
               <span>PERSONAL BEST</span>
               <strong>{formatScore(best)}</strong>
             </div>
           </div>
 
-          <div className="booster-hud" aria-label="Collected boosters">
-            <div
-              className="booster-slot boing-slot"
-              data-ready={snapshot.boosters.doubleJumpReady}
-            >
-              <ChevronsUp aria-hidden="true" />
-              <span>
-                <strong>Boing!</strong>
-                <small>
-                  {snapshot.boosters.doubleJumpReady
-                    ? touchDriving
-                      ? 'Tap JUMP again'
-                      : 'Space again in midair'
-                    : 'Find a spring'}
-                </small>
-              </span>
-              <b
-                aria-label={
-                  snapshot.boosters.doubleJumpReady
-                    ? 'One charge ready'
-                    : 'No charge'
-                }
-              >
-                {snapshot.boosters.doubleJumpReady ? '1' : '0'}
-              </b>
-            </div>
-            <div
-              className="booster-slot shield-slot"
-              data-ready={snapshot.boosters.shieldReady}
-            >
-              <Shield aria-hidden="true" />
-              <span>
-                <strong>Bubble Buddy</strong>
-                <small>
-                  {snapshot.boosters.shieldReady
-                    ? 'One bonk covered'
-                    : snapshot.boosters.protectionS > 0
-                      ? 'Recovering…'
-                      : 'Find a bubble'}
-                </small>
-              </span>
-              <b
-                aria-label={
-                  snapshot.boosters.shieldReady
-                    ? 'One shield ready'
-                    : 'No shield'
-                }
-              >
-                {snapshot.boosters.shieldReady ? '1' : '0'}
-              </b>
-            </div>
-          </div>
           {isPlaying &&
             doubleJumpHintUntilTick !== null &&
             snapshot.tick < doubleJumpHintUntilTick && (

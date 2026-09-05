@@ -63,55 +63,54 @@
 }
 
 .booster-hud {
-  position: absolute;
-  z-index: 10;
-  left: 22px;
-  bottom: 24px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
   display: flex;
-  gap: 10px;
+  flex: 0 0 auto;
+  gap: 6px;
   pointer-events: none;
 }
 .booster-slot {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 60px;
-  padding: 9px 12px;
-  border: 2px solid #57657e;
-  border-radius: 15px;
-  background: rgb(9 20 43 / 92%);
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgb(189 200 219 / 30%);
+  border-radius: 10px;
+  background: rgb(9 20 43 / 85%);
   color: #bdc8db;
-  box-shadow: 0 5px 0 rgb(0 0 0 / 20%);
+  opacity: 0.55;
   transition:
     border-color 150ms,
-    color 150ms;
+    color 150ms,
+    opacity 150ms;
 }
 .booster-slot svg {
-  width: 25px;
-  height: 25px;
+  width: 18px;
+  height: 18px;
 }
-.booster-slot span {
-  display: grid;
-  gap: 2px;
+.boing-slot {
+  --booster-color: var(--boing);
 }
-.booster-slot strong {
-  font-size: 14px;
+.shield-slot {
+  --booster-color: var(--bubble);
 }
-.booster-slot small {
-  font-size: 12px;
-  color: #d1d9e8;
+.booster-slot[data-ready='true'] {
+  border-color: var(--booster-color);
+  color: var(--booster-color);
+  opacity: 1;
 }
-.booster-slot b {
-  font-size: 20px;
-  margin-left: 4px;
-}
-.boing-slot[data-ready='true'] {
-  border-color: var(--boing);
-  color: var(--boing);
-}
-.shield-slot[data-ready='true'] {
-  border-color: var(--bubble);
-  color: var(--bubble);
+.booster-slot[data-ready='true']::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .booster-notice {
   position: absolute;
@@ -179,21 +178,6 @@
   color: #e1e8f5;
 }
 @media (max-width: 640px) {
-  .booster-hud {
-    left: 12px;
-    bottom: 16px;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .booster-slot {
-    min-height: 46px;
-    padding: 6px 9px;
-    gap: 6px;
-  }
-  .booster-slot svg {
-    width: 21px;
-    height: 21px;
-  }
   .booster-notice {
     top: 100px;
     font-size: 14px;
@@ -201,13 +185,6 @@
   }
 }
 @media (max-height: 500px) {
-  .booster-hud {
-    bottom: 10px;
-    flex-direction: row;
-  }
-  .booster-slot small {
-    display: none;
-  }
   .booster-notice {
     top: 85px;
   }
@@ -515,6 +492,18 @@ button {
   }
 }
 
+@media (max-width: 640px) {
+  .booster-hud {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    margin-top: 0;
+  }
+  .booster-notice {
+    top: calc(max(12px, env(safe-area-inset-top)) + 116px);
+  }
+}
+
 /* Thumb controls have their own clear space below the chase camera. */
 .touch-controls {
   margin: 0;
@@ -630,29 +619,6 @@ button {
 }
 [data-touch='true'] .keyboard-hint {
   display: none;
-}
-[data-touch='true'] .booster-hud {
-  top: calc(max(12px, env(safe-area-inset-top)) + 62px);
-  left: max(12px, env(safe-area-inset-left));
-  bottom: auto;
-  flex-direction: row;
-  gap: 6px;
-}
-[data-touch='true'] .booster-slot {
-  min-height: 42px;
-  padding: 6px 9px;
-  gap: 5px;
-  border-radius: 12px;
-}
-[data-touch='true'] .booster-slot span {
-  display: none;
-}
-[data-touch='true'] .booster-slot svg {
-  width: 21px;
-  height: 21px;
-}
-[data-touch='true'] .booster-slot b {
-  font-size: 17px;
 }
 [data-touch='true'] .booster-notice {
   top: calc(max(12px, env(safe-area-inset-top)) + 116px);

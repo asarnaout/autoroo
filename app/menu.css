@@ -80,7 +80,6 @@
   bottom: 10.8%;
   display: grid;
   justify-items: center;
-  gap: clamp(16px, 2.2vh, 26px);
   width: clamp(340px, 32vw, 560px);
   transform: translateX(-50%);
   animation: menu-arrive 600ms 120ms cubic-bezier(0.2, 0.8, 0.25, 1.1) both;
@@ -144,49 +143,6 @@
 .start-play-button:focus-visible {
   outline: 3px dashed var(--menu-cream);
   outline-offset: 13px;
-}
-
-.start-actions {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(8px, 1.2vw, 18px);
-  max-width: calc(100vw - 24px);
-  padding: 2px 18px;
-  border: 1px solid rgb(232 210 255 / 32%);
-  border-radius: 100px;
-  background: rgb(37 19 83 / 85%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 12%);
-  backdrop-filter: blur(8px);
-}
-
-.start-actions button {
-  min-height: 40px;
-  padding: 5px 2px;
-  gap: 9px;
-  border-radius: 10px;
-  color: var(--menu-cream);
-  font-family: var(--menu-type);
-  font-size: clamp(15px, 1.35vw, 22px);
-  font-weight: 400;
-}
-
-.start-actions button:hover {
-  color: #ffe74a;
-  background: transparent;
-}
-.start-actions button:focus-visible {
-  outline: 2px solid var(--menu-cream);
-  outline-offset: 2px;
-}
-.start-actions svg {
-  width: 26px;
-  height: 26px;
-}
-.start-action-divider {
-  width: 1px;
-  height: 23px;
-  background: rgb(255 245 214 / 60%);
 }
 
 .start-stunt {
@@ -433,7 +389,6 @@
   .start-launch {
     bottom: 18%;
     width: min(83%, 480px);
-    gap: 18px;
   }
   .start-play-button {
     height: 73px;
@@ -448,18 +403,7 @@
   .start-play-button:disabled {
     font-size: clamp(18px, 4vw, 29px);
   }
-  .start-actions {
-    gap: 9px;
-    padding-inline: 12px;
-  }
-  .start-actions button {
-    font-size: 16px;
-    min-height: 36px;
-  }
-  .start-actions svg {
-    width: 23px;
-    height: 23px;
-  }
+
   .start-controls {
     bottom: max(20px, env(safe-area-inset-bottom));
     width: calc(100% - 36px);
@@ -503,9 +447,6 @@
   [data-touch='true'] .start-stage {
     min-height: 100svh;
   }
-  [data-touch='true'] .start-launch {
-    gap: 12px;
-  }
   [data-touch='true'] .start-play-button {
     height: 58px;
     min-height: 58px;
@@ -516,18 +457,6 @@
 }
 
 @media (max-width: 350px) and (max-aspect-ratio: 4/5) {
-  .start-actions {
-    gap: 6px;
-    padding-inline: 10px;
-  }
-  .start-actions button {
-    gap: 5px;
-    font-size: 14px;
-  }
-  .start-actions svg {
-    width: 19px;
-    height: 19px;
-  }
   .start-control {
     font-size: 12px;
     gap: 5px;

@@ -10,14 +10,6 @@ import {
   type RefAttributes,
 } from 'react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
 import { Kbd } from '@/components/ui/kbd';
 import {
   Pause,
@@ -27,11 +19,9 @@ import {
   Volume2,
   VolumeX,
   ChevronsUp,
-  Rocket,
   Shield,
-  Sparkles,
 } from 'lucide-react';
-import { BOOSTER_INFO, makeBoosterState } from './game/boosters';
+import { makeBoosterState } from './game/boosters';
 import { FIXED_DT, LANE_X, countLanes } from './game/constants';
 import { laneMaskAt } from './game/generator';
 import type { GameEvent, RunSnapshot } from './game/contracts';
@@ -526,25 +516,6 @@ export function AutorooApp() {
                     : `Loading city ${Math.round(loadProgress * 100)}%`}
                 </span>
               </Button>
-              <div className="start-actions">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={toggleMuted}
-                  aria-label={
-                    muted ? 'Sound off. Unmute sound' : 'Sound on. Mute sound'
-                  }
-                >
-                  {muted ? (
-                    <VolumeX aria-hidden="true" />
-                  ) : (
-                    <Volume2 aria-hidden="true" />
-                  )}
-                  {muted ? 'Sound off' : 'Sound on'}
-                </Button>
-                <span className="start-action-divider" aria-hidden="true" />
-                <BoostersDialog />
-              </div>
             </div>
 
             {!touchDriving && (
@@ -617,45 +588,5 @@ export function AutorooApp() {
             : ''}
       </div>
     </main>
-  );
-}
-
-function BoostersDialog() {
-  const icons = { boing: ChevronsUp, rocket: Rocket, shield: Shield };
-  return (
-    <Dialog>
-      <DialogTrigger render={<Button variant="ghost" size="sm" />}>
-        <Sparkles aria-hidden="true" /> Boosters
-      </DialogTrigger>
-      <DialogContent className="credits-dialog booster-guide">
-        <DialogHeader>
-          <DialogTitle>Roadside weirdos</DialogTitle>
-          <DialogDescription>
-            Steer into a booster or jump over it in the same lane to collect it.
-            Yeet flights skip pickups.
-          </DialogDescription>
-        </DialogHeader>
-        {(['boing', 'shield', 'rocket'] as const).map((kind) => {
-          const info = BOOSTER_INFO[kind];
-          const Icon = icons[kind];
-          return (
-            <article key={kind} className={`booster-guide-row ${kind}-guide`}>
-              <Icon aria-hidden="true" />
-              <div>
-                <h3>
-                  {info.name} <span>{info.rarity}</span>
-                </h3>
-                <p>{info.instruction}</p>
-              </div>
-            </article>
-          );
-        })}
-        <p className="credits-footnote">
-          Boing! works even while falling. Release JUMP (or Space) and press
-          again to use it. Holding JUMP keeps hopping after landing. Steer
-          during a rocket flight to choose your landing lane.
-        </p>
-      </DialogContent>
-    </Dialog>
   );
 }

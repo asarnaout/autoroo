@@ -5,14 +5,16 @@ export type DrivingControl = 'left' | 'right' | 'jump';
 
 const KEY_CONTROLS: Readonly<Record<string, DrivingControl>> = {
   ArrowLeft: 'left',
+  KeyA: 'left',
   ArrowRight: 'right',
+  KeyD: 'right',
   Space: 'jump',
+  ArrowUp: 'jump',
+  KeyW: 'jump',
 };
 
 const GAME_KEYS = new Set([
-  'ArrowLeft',
-  'ArrowRight',
-  'Space',
+  ...Object.keys(KEY_CONTROLS),
   'Escape',
   'Enter',
   'KeyR',

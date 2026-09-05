@@ -8,40 +8,59 @@ import {
 import { AutorooSimulation } from '../app/game/simulation';
 
 describe('keyboard input buffering', () => {
-  it('queues a discrete lane snap and ignores key repeat', () => {
-    const input = new InputBuffer();
-    input.keyDown('ArrowRight', false);
-    input.keyDown('ArrowRight', true);
-    expect(input.consume().laneDelta).toBe(1);
-    expect(input.consume().laneDelta).toBe(0);
-  });
+  it.each([
+    ['ArrowLeft', -1],
+    ['KeyA', -1],
+    ['ArrowRight', 1],
+    ['KeyD', 1],
+  ] as const)(
+    'queues one lane snap for %s and ignores key repeat',
+    (code, direction) => {
+      const input = new InputBuffer();
+      expect(isGameKey(code)).toBe(true);
+      input.keyDown(code, false);
+      input.keyDown(code, true);
+      expect(input.consume().laneDelta).toBe(direction);
+      expect(input.consume().laneDelta).toBe(0);
+    },
+  );
 
-  it('keeps Space active while held without generating repeated taps', () => {
-    const input = new InputBuffer();
-    input.keyDown('Space');
-    expect(input.consume()).toMatchObject({
-      jumpPressed: true,
-      jumpTapped: true,
-    });
-    expect(input.consume()).toMatchObject({
-      jumpPressed: true,
-      jumpTapped: false,
-    });
-    input.keyDown('Space', true);
-    expect(input.consume().jumpPressed).toBe(true);
-    input.keyUp('Space');
-    expect(input.consume().jumpPressed).toBe(false);
-  });
+  it.each(['Space', 'ArrowUp', 'KeyW'])(
+    'keeps %s active while held without generating repeated taps',
+    (code) => {
+      const input = new InputBuffer();
+      expect(isGameKey(code)).toBe(true);
+      input.keyDown(code);
+      expect(input.consume()).toMatchObject({
+        jumpPressed: true,
+        jumpTapped: true,
+      });
+      expect(input.consume()).toMatchObject({
+        jumpPressed: true,
+        jumpTapped: false,
+      });
+      input.keyDown(code, true);
+      expect(input.consume()).toMatchObject({
+        jumpPressed: true,
+        jumpTapped: false,
+      });
+      input.keyUp(code);
+      expect(input.consume().jumpPressed).toBe(false);
+    },
+  );
 
-  it('preserves one jump when Space is tapped between fixed ticks', () => {
-    const input = new InputBuffer();
-    input.keyDown('Space');
-    input.keyUp('Space');
-    expect(input.consume().jumpPressed).toBe(true);
-    expect(input.consume().jumpPressed).toBe(false);
-  });
+  it.each(['Space', 'ArrowUp', 'KeyW'])(
+    'preserves one jump when %s is tapped between fixed ticks',
+    (code) => {
+      const input = new InputBuffer();
+      input.keyDown(code);
+      input.keyUp(code);
+      expect(input.consume().jumpPressed).toBe(true);
+      expect(input.consume().jumpPressed).toBe(false);
+    },
+  );
 
-  it('always drives on desktop and ignores the former speed-control keys', () => {
+  it('always drives on desktop and ignores the former brake key', () => {
     const input = new InputBuffer();
     const run = new AutorooSimulation(0xa770_2026);
     run.start();
@@ -52,7 +71,6 @@ describe('keyboard input buffering', () => {
 
     input.keyDown('ArrowDown');
     expect(isGameKey('ArrowDown')).toBe(false);
-    expect(isGameKey('ArrowUp')).toBe(false);
     for (let tick = 0; tick < 10; tick += 1) run.tick(input.consume());
     const speedWhileDownHeld = run.snapshot().player.speedMps;
     expect(speedWhileDownHeld).toBeGreaterThan(driving.speedMps);
